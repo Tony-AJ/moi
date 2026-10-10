@@ -1,0 +1,68 @@
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
+import type { AdminRole } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
+import { ROLES_KEY } from '../decorators/roles.decorator';
+
+/**
+ * Every /admin route is closed by default. The token is verified AND the admin
+ * row is re-read on each request so a deactivated account loses access
+ * immediately instead of at token expiry.
+ */
+@Injectable()
+export class AdminAuthGuard implements CanActivate {
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly prisma: PrismaService,
+    private readonly reflector: Reflector,
+  ) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest();
+    const header: string | undefined = request.headers?.authorization;
+
+    if (!header?.startsWith('Bearer ')) {
+      throw new UnauthorizedException('Missing bearer token');
+    }
+
+    let payload: { sub: string };
+    try {
+      payload = await this.jwt.verifyAsync(header.slice(7).trim());
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token');
+    }
+
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, name: true, role: true, isActive: true },
+    });
+
+    if (!admin?.isActive) {
+      throw new UnauthorizedException('Admin account is not active');
+    }
+
+    const required = this.reflector.getAllAndOverride<AdminRole[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (required?.length && !required.includes(admin.role)) {
+      throw new ForbiddenException('Insufficient role');
+    }
+
+    request.admin = {
+      id: admin.id,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+    };
+    return true;
+  }
+}

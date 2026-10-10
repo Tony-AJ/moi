@@ -1,0 +1,384 @@
+:root {
+  --bg: #fdf8f3;
+  --card: #ffffff;
+  --ink: #221b16;
+  --ink-soft: #6b5d55;
+  --line: #e7dcd1;
+  --brand: #8c1d2f;
+  --brand-dark: #6d1525;
+  --accent: #b8860b;
+  --ok: #176b42;
+  --ok-bg: #e7f5ed;
+  --warn: #8a5a00;
+  --warn-bg: #fdf3dd;
+  --err: #a1201c;
+  --err-bg: #fdeceb;
+  --radius: 14px;
+  --shadow: 0 2px 12px rgba(55, 30, 20, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Segoe UI', system-ui, -apple-system, 'Noto Sans Tamil', sans-serif;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+.shell {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+}
+
+.event-head {
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+  color: #fff;
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.event-head h1 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.event-head .meta {
+  font-size: 0.86rem;
+  opacity: 0.9;
+  margin: 2px 0 0;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+}
+
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 12px 13px;
+  font-size: 1rem;
+  font-family: inherit;
+  color: var(--ink);
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(140, 29, 47, 0.1);
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.field .hint {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  margin-top: 5px;
+}
+
+.field .error {
+  font-size: 0.8rem;
+  color: var(--err);
+  margin-top: 5px;
+  font-weight: 600;
+}
+
+.amount-input {
+  position: relative;
+}
+
+.amount-input input {
+  padding-left: 32px;
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.amount-input .rupee {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chip {
+  border: 1.5px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.chip[aria-pressed='true'] {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+button {
+  font-family: inherit;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  padding: 15px;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: #fff;
+  background: var(--brand);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn.secondary {
+  background: #fff;
+  color: var(--brand);
+  border: 1.5px solid var(--brand);
+}
+
+.btn.ghost {
+  background: transparent;
+  color: var(--ink-soft);
+  border: 1.5px solid var(--line);
+}
+
+.btn + .btn {
+  margin-top: 10px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 0.92rem;
+}
+
+.summary-row:last-child {
+  border-bottom: none;
+}
+
+.summary-row .k {
+  color: var(--ink-soft);
+}
+
+.summary-row .v {
+  font-weight: 700;
+  text-align: right;
+}
+
+.amount-big {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--brand);
+  text-align: center;
+  margin: 6px 0 2px;
+}
+
+.code-pill {
+  display: inline-block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: #f4ece3;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+
+.banner {
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  margin-bottom: 14px;
+  border: 1px solid transparent;
+}
+
+.banner.info {
+  background: #eef3fb;
+  border-color: #cfdcf0;
+  color: #1d3a63;
+}
+
+.banner.ok {
+  background: var(--ok-bg);
+  border-color: #bfe3cf;
+  color: var(--ok);
+}
+
+.banner.warn {
+  background: var(--warn-bg);
+  border-color: #efdcae;
+  color: var(--warn);
+}
+
+.banner.err {
+  background: var(--err-bg);
+  border-color: #f2c7c4;
+  color: var(--err);
+}
+
+.status-badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  padding: 5px 12px;
+}
+
+.status-VERIFIED {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.status-AWAITING_VERIFICATION,
+.status-NOT_FOUND {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.status-REVIEW_REQUIRED {
+  background: #ede7fa;
+  color: #4b2e86;
+}
+
+.status-REJECTED {
+  background: var(--err-bg);
+  color: var(--err);
+}
+
+.steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.steps .step {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.steps .step.done {
+  background: var(--brand);
+}
+
+.center {
+  text-align: center;
+}
+
+.muted {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.footer-note {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  margin-top: 22px;
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  margin: 24px auto;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17120f;
+    --card: #211a16;
+    --ink: #f3ebe4;
+    --ink-soft: #b3a39a;
+    --line: #3a2e27;
+  }
+  input,
+  select,
+  textarea,
+  .chip {
+    background: #19130f;
+    color: var(--ink);
+  }
+  .code-pill {
+    background: #2b211b;
+  }
+}

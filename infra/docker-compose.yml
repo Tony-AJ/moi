@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: moi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: moi
+      POSTGRES_PASSWORD: moi_dev_password
+      POSTGRES_DB: moi_ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - moi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moi -d moi_ledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  moi_pgdata:

@@ -1,0 +1,248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Verification lifecycle of a single Moi contribution.
+/// Only reconciliation against bank records (or an explicit admin attestation
+/// for cash) may move an entry to VERIFIED.
+enum PaymentStatus {
+  AWAITING_VERIFICATION
+  VERIFIED
+  REVIEW_REQUIRED
+  NOT_FOUND
+  REJECTED
+}
+
+enum PaymentMethod {
+  UPI
+  CASH
+  BANK_TRANSFER
+  OTHER
+}
+
+enum PaymentClaimSource {
+  GUEST
+  ADMIN
+}
+
+enum PaymentClaimStatus {
+  CLAIMED
+  MATCHED
+  REJECTED
+  SUPERSEDED
+}
+
+enum TxnDirection {
+  CREDIT
+  DEBIT
+}
+
+enum AdminRole {
+  OWNER
+  STAFF
+}
+
+model Event {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  hostName        String?
+  eventDate       DateTime
+  venue           String?
+  /// UPI beneficiary for this event. Falls back to DEFAULT_UPI_ID when null.
+  upiId           String?
+  upiPayeeName    String?
+  /// Suggested amounts shown as quick-pick chips on the guest form (paise).
+  suggestedAmounts Int[]   @default([])
+  minAmountPaise  Int      @default(100)
+  maxAmountPaise  Int      @default(10000000)
+  collectPhone    Boolean  @default(false)
+  requirePhone    Boolean  @default(false)
+  /// When false the public guest form is closed (event over / paused).
+  isOpen          Boolean  @default(true)
+  /// Monotonic per-event counter used to build MOI-000123 codes.
+  entrySequence   Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  entries          MoiEntry[]
+  statementImports BankStatementImport[]
+  bankTransactions BankTransaction[]
+
+  @@map("events")
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         AdminRole @default(STAFF)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  auditLogs        AuditLog[]
+  recordedEntries  MoiEntry[]            @relation("recordedBy")
+  verifiedEntries  MoiEntry[]            @relation("verifiedBy")
+  statementImports BankStatementImport[]
+
+  @@map("admin_users")
+}
+
+model MoiEntry {
+  id         String @id @default(cuid())
+  eventId    String
+  /// Per-event running number (1,2,3...).
+  entryNumber Int
+  /// Human readable receipt code, e.g. MOI-000123.
+  entryCode  String
+
+  guestName    String
+  guestAddress String?
+  guestPhone   String?
+  relation     String?
+  amountPaise  Int
+
+  paymentMethod PaymentMethod @default(UPI)
+  paymentStatus PaymentStatus @default(AWAITING_VERIFICATION)
+
+  /// Opaque token handed to the guest so the public status endpoint never
+  /// exposes a database id.
+  accessToken String @unique
+
+  /// Client supplied idempotency key; blocks accidental double submits.
+  clientRequestId String?
+
+  note              String?
+  recordedByAdminId String?
+  verifiedByAdminId String?
+  verifiedAt        DateTime?
+  reviewReason      String?
+  lastReconciledAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event            Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  recordedByAdmin  AdminUser?        @relation("recordedBy", fields: [recordedByAdminId], references: [id])
+  verifiedByAdmin  AdminUser?        @relation("verifiedBy", fields: [verifiedByAdminId], references: [id])
+  paymentClaims    PaymentClaim[]
+  bankTransactions BankTransaction[]
+
+  @@unique([eventId, entryNumber])
+  @@unique([eventId, entryCode])
+  @@unique([eventId, clientRequestId])
+  @@index([eventId, paymentStatus])
+  @@index([guestName])
+  @@map("moi_entries")
+}
+
+/// A claimed UPI reference (UTR). A claim is never proof of payment.
+model PaymentClaim {
+  id      String @id @default(cuid())
+  entryId String
+
+  /// Raw value as typed by the guest.
+  utr String
+  /// Uppercased, non-alphanumerics stripped. Globally unique so the same UTR
+  /// cannot be claimed against two different entries.
+  utrNormalized String @unique
+
+  source PaymentClaimSource @default(GUEST)
+  status PaymentClaimStatus @default(CLAIMED)
+
+  matchedBankTransactionId String?   @unique
+  matchedAt                DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entry               MoiEntry         @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  matchedBankTransaction BankTransaction? @relation(fields: [matchedBankTransactionId], references: [id])
+
+  @@index([entryId])
+  @@map("payment_claims")
+}
+
+model BankStatementImport {
+  id       String  @id @default(cuid())
+  eventId  String?
+  fileName String
+  /// sha256 of the uploaded bytes; blocks re-importing the same file.
+  fileHash String  @unique
+
+  totalRows     Int @default(0)
+  importedRows  Int @default(0)
+  duplicateRows Int @default(0)
+  skippedRows   Int @default(0)
+
+  uploadedByAdminId String?
+  createdAt         DateTime @default(now())
+
+  event            Event?            @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  uploadedByAdmin  AdminUser?        @relation(fields: [uploadedByAdminId], references: [id])
+  bankTransactions BankTransaction[]
+
+  @@map("bank_statement_imports")
+}
+
+model BankTransaction {
+  id       String  @id @default(cuid())
+  importId String
+  eventId  String?
+
+  txnDate     DateTime
+  valueDate   DateTime?
+  description String
+  /// Reference / UTR as printed on the statement.
+  reference     String?
+  /// Normalized reference used for matching.
+  refNormalized String?
+  amountPaise   Int
+  direction     TxnDirection
+  balancePaise  BigInt?
+
+  /// sha256 of the normalized row; blocks duplicate rows across imports.
+  rowHash String @unique
+
+  /// A bank transaction can verify at most ONE Moi entry.
+  matchedEntryId String?   @unique
+  matchedAt      DateTime?
+  matchNote      String?
+
+  createdAt DateTime @default(now())
+
+  import       BankStatementImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  event        Event?              @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  matchedEntry MoiEntry?           @relation(fields: [matchedEntryId], references: [id])
+  paymentClaim PaymentClaim?
+
+  @@index([refNormalized])
+  @@index([amountPaise, direction])
+  @@index([txnDate])
+  @@map("bank_transactions")
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  adminUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  adminUser AdminUser? @relation(fields: [adminUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

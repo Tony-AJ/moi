@@ -1,0 +1,34 @@
+import { Body, Controller, Get, Ip, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import { AdminAuthService } from './admin-auth.service';
+import { LoginDto } from './dto/login.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
+import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
+
+@Controller('admin/auth')
+export class AdminAuthController {
+  constructor(private readonly auth: AdminAuthService) {}
+
+  @Post('login')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  login(@Body() dto: LoginDto, @Ip() ip: string) {
+    return this.auth.login(dto, ip);
+  }
+
+  @Get('me')
+  @UseGuards(AdminAuthGuard)
+  me(@CurrentAdmin() admin: AdminPrincipal) {
+    return this.auth.me(admin.id);
+  }
+
+  @Post('change-password')
+  @UseGuards(AdminAuthGuard)
+  changePassword(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Body() dto: ChangePasswordDto,
+    @Ip() ip: string,
+  ) {
+    return this.auth.changePassword(admin.id, dto, ip);
+  }
+}
