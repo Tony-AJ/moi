@@ -5,6 +5,7 @@ import {
   formatDateTime,
   formatInr,
   type BankTransactionRow,
+  type BeneficiaryAccount,
   type ImportResult,
   type Paginated,
   type ReconciliationSummary,
@@ -16,6 +17,8 @@ export function ReconcilePage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
+  const [accounts, setAccounts] = useState<BeneficiaryAccount[]>([]);
+  const [accountId, setAccountId] = useState('');
   const [autoReconcile, setAutoReconcile] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +68,23 @@ export function ReconcilePage() {
     }
   }, [selectedEventId]);
 
+  // The statement has to be attributed to an account before it can be
+  // imported, so the list is loaded up front.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const list = await api.beneficiaries();
+        setAccounts(list);
+        setAccountId((current) => {
+          if (current && list.some((account) => account.id === current)) return current;
+          return list.find((account) => account.status === 'CONFIRMED')?.id ?? '';
+        });
+      } catch {
+        setAccounts([]);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     void loadTransactions();
   }, [loadTransactions]);
@@ -74,12 +94,18 @@ export function ReconcilePage() {
   }, [loadImports]);
 
   async function upload(force = false) {
-    if (!file || !selectedEventId) return;
+    if (!file || !selectedEventId || !accountId) return;
     setBusy(true);
     setError(null);
     setDuplicateFileWarning(false);
     try {
-      const uploadResult = await api.importStatement(file, selectedEventId, autoReconcile, force);
+      const uploadResult = await api.importStatement(
+        file,
+        accountId,
+        selectedEventId,
+        autoReconcile,
+        force,
+      );
       setResult(uploadResult);
       setRun(uploadResult.reconciliation);
       setFile(null);
@@ -137,7 +163,32 @@ export function ReconcilePage() {
 
       <div className="panel">
         <h2>Import a statement</h2>
+        {accounts.length === 0 ? (
+          <div className="alert warn">
+            No payment account is configured yet. Add and confirm the UPI account that receives
+            contributions on the Events &amp; QR page before importing a statement.
+          </div>
+        ) : null}
+
         <div className="toolbar">
+          <div>
+            <label htmlFor="account">Statement account</label>
+            <select
+              id="account"
+              value={accountId}
+              onChange={(domEvent) => setAccountId(domEvent.target.value)}
+            >
+              <option value="">Select the account this statement came from</option>
+              {accounts
+                .filter((account) => account.status !== 'DISABLED')
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.label} ({account.upiId})
+                    {account.status === 'CONFIRMED' ? '' : ' - unconfirmed'}
+                  </option>
+                ))}
+            </select>
+          </div>
           <div className="grow">
             <label htmlFor="statement">Statement file</label>
             <input
@@ -159,7 +210,12 @@ export function ReconcilePage() {
               <option value="no">Import only</option>
             </select>
           </div>
-          <button className="btn" type="button" disabled={!file || busy} onClick={() => upload()}>
+          <button
+            className="btn"
+            type="button"
+            disabled={!file || !accountId || busy}
+            onClick={() => upload()}
+          >
             {busy ? 'Working...' : 'Import'}
           </button>
           <button className="btn secondary" type="button" disabled={busy} onClick={rerun}>

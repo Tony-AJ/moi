@@ -74,17 +74,31 @@ async function seedWorkspace(params: {
     suggestedAmounts: number[];
   };
 }) {
-  const workspace = await prisma.workspace.upsert({
-    where: { slug: params.slug },
-    update: { status: 'ACTIVE' },
-    create: {
-      slug: params.slug,
-      name: params.name,
-      status: 'ACTIVE',
-      activatedAt: new Date(),
-      contactEmail: params.ownerEmail,
-    },
+  // If this event already exists and belongs to a workspace, keep it there.
+  // Moving it would leave its entries, imports and transactions pointing at
+  // the old workspace's beneficiary account, which is exactly the kind of
+  // split-tenant record the isolation rules exist to prevent.
+  const existingEvent = await prisma.event.findUnique({
+    where: { slug: params.event.slug },
+    select: { workspaceId: true },
   });
+
+  const workspace = existingEvent?.workspaceId
+    ? await prisma.workspace.update({
+        where: { id: existingEvent.workspaceId },
+        data: { status: 'ACTIVE' },
+      })
+    : await prisma.workspace.upsert({
+        where: { slug: params.slug },
+        update: { status: 'ACTIVE' },
+        create: {
+          slug: params.slug,
+          name: params.name,
+          status: 'ACTIVE',
+          activatedAt: new Date(),
+          contactEmail: params.ownerEmail,
+        },
+      });
 
   const owner = await upsertUser({
     email: params.ownerEmail,
@@ -112,7 +126,8 @@ async function seedWorkspace(params: {
 
   const event = await prisma.event.upsert({
     where: { slug: params.event.slug },
-    update: { workspaceId: workspace.id },
+    // workspaceId is set only on create; see the note above.
+    update: {},
     create: {
       workspaceId: workspace.id,
       slug: params.event.slug,
@@ -168,8 +183,8 @@ async function main(): Promise<void> {
     ownerEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@moiledger.local',
     ownerName: process.env.SEED_ADMIN_NAME ?? 'Event Organizer',
     password: process.env.SEED_ADMIN_PASSWORD ?? 'ChangeMe#123',
-    upiId: process.env.DEFAULT_UPI_ID ?? 'kumar.family@okicici',
-    payeeName: process.env.DEFAULT_UPI_PAYEE_NAME ?? 'Kumar Family',
+    upiId: 'kumar.family@okicici',
+    payeeName: 'Kumar Family',
     event: {
       slug: 'kumar-wedding-2026',
       name: 'Kumar & Priya Wedding Reception',

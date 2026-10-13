@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PaymentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -61,6 +61,10 @@ export class ReconciliationService {
    *  - More than one candidate -> REVIEW_REQUIRED (never auto verified).
    *  - Amount-only match -> REVIEW_REQUIRED, never VERIFIED.
    *  - A bank transaction already linked to another entry is never reused.
+   *  - Candidates are restricted to the beneficiary account the guest was
+   *    actually handed off to. A credit paid into one customer's account can
+   *    never verify another customer's contribution, even when the amount,
+   *    the date and the reference all coincide.
    */
   async matchEntry(
     entryId: string,
@@ -76,6 +80,8 @@ export class ReconciliationService {
           where: { status: { in: ['CLAIMED', 'MATCHED'] } },
           orderBy: { createdAt: 'desc' },
         },
+        // The pinned config decides which bank account may settle this entry.
+        paymentConfig: { select: { beneficiaryAccountId: true } },
       },
     });
 
@@ -109,6 +115,27 @@ export class ReconciliationService {
       };
     }
 
+    // Every candidate query is scoped to this account. Without it, matching
+    // would be free to reach into another workspace's imported statement.
+    const beneficiaryAccountId = entry.paymentConfig?.beneficiaryAccountId;
+
+    if (!beneficiaryAccountId) {
+      // No pinned beneficiary means there is no account whose credits may
+      // settle this entry, so there is nothing safe to match against. The
+      // status is left untouched: this is a configuration gap, not evidence
+      // that the guest did not pay.
+      return {
+        entryId: entry.id,
+        entryCode: entry.entryCode,
+        status: previousStatus,
+        previousStatus,
+        changed: false,
+        reason:
+          'No payment beneficiary is recorded for this entry, so it cannot be matched against any bank account. Configure the event beneficiary and re-run.',
+        candidateCount: 0,
+      };
+    }
+
     const from = new Date(entry.createdAt);
     from.setDate(from.getDate() - opts.dateWindowDaysBefore);
     const to = new Date(entry.createdAt);
@@ -119,7 +146,10 @@ export class ReconciliationService {
       matchedEntryId: null,
       amountPaise: entry.amountPaise,
       txnDate: { gte: from, lte: to },
-      OR: [{ eventId: entry.eventId }, { eventId: null }],
+      // Strict equality, never "or null". A null used to behave as a
+      // wildcard that matched every event, which is the cross-tenant hole
+      // this closes.
+      beneficiaryAccountId,
     };
 
     const refs = entry.paymentClaims
@@ -130,10 +160,7 @@ export class ReconciliationService {
     if (refs.length) {
       const refCandidates = await this.prisma.bankTransaction.findMany({
         where: {
-          direction: 'CREDIT',
-          matchedEntryId: null,
-          amountPaise: entry.amountPaise,
-          txnDate: { gte: from, lte: to },
+          ...baseWhere,
           OR: refs.flatMap((ref) => [
             { refNormalized: ref },
             { refNormalized: { contains: ref } },
@@ -264,14 +291,40 @@ export class ReconciliationService {
   ): Promise<EntryMatchResult> {
     const now = new Date();
 
+    // The beneficiary account the entry is pinned to. Resolved here rather
+    // than trusted from the caller, because a manual resolve supplies the
+    // transaction id straight from the browser: without this check an
+    // operator could settle an entry with a credit paid into another
+    // workspace's account.
+    const entryScope = await this.prisma.moiEntry.findUnique({
+      where: { id: entryId },
+      select: { paymentConfig: { select: { beneficiaryAccountId: true } } },
+    });
+    const beneficiaryAccountId = entryScope?.paymentConfig?.beneficiaryAccountId;
+
+    if (!beneficiaryAccountId) {
+      throw new BadRequestException(
+        'This entry has no payment beneficiary recorded, so no bank credit can be matched to it.',
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.bankTransaction.updateMany({
-        where: { id: bankTransactionId, matchedEntryId: null },
+        // The scope is part of the write condition, so the match either
+        // happens against the right account or not at all.
+        where: {
+          id: bankTransactionId,
+          matchedEntryId: null,
+          direction: 'CREDIT',
+          beneficiaryAccountId,
+        },
         data: { matchedEntryId: entryId, matchedAt: now, matchNote: meta.reason },
       });
 
       if (claimed.count !== 1) {
-        throw new Error('That bank transaction is already matched to another entry');
+        throw new BadRequestException(
+          'That bank transaction cannot settle this entry: it is already matched, is not a credit, or belongs to a different payment account.',
+        );
       }
 
       await tx.moiEntry.update({
@@ -359,9 +412,17 @@ export class ReconciliationService {
     const opts = { ...DEFAULTS, ...options };
     const entry = await this.prisma.moiEntry.findUnique({
       where: { id: entryId },
-      include: { paymentClaims: { orderBy: { createdAt: 'desc' } } },
+      include: {
+        paymentClaims: { orderBy: { createdAt: 'desc' } },
+        paymentConfig: { select: { beneficiaryAccountId: true } },
+      },
     });
     if (!entry) throw new NotFoundException('Entry not found');
+
+    // Same scoping rule as matchEntry: the review queue must never offer an
+    // operator a credit that was paid into a different account.
+    const beneficiaryAccountId = entry.paymentConfig?.beneficiaryAccountId;
+    if (!beneficiaryAccountId) return [];
 
     const from = new Date(entry.createdAt);
     from.setDate(from.getDate() - opts.dateWindowDaysBefore);
@@ -376,6 +437,7 @@ export class ReconciliationService {
       where: {
         direction: 'CREDIT',
         matchedEntryId: null,
+        beneficiaryAccountId,
         txnDate: { gte: from, lte: to },
         OR: [
           { amountPaise: entry.amountPaise },

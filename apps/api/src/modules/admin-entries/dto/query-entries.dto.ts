@@ -15,6 +15,15 @@ const STATUSES = Object.values(PaymentStatus);
 const METHODS = Object.values(PaymentMethod);
 
 export class QueryEntriesDto {
+  /**
+   * Which workspace to read. Only ever a request: the server resolves the
+   * caller's membership and uses that, so sending another customer's id
+   * cannot widen what comes back.
+   */
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @IsOptional()
   @IsString()
   eventId?: string;

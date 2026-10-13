@@ -15,6 +15,8 @@ import { AdminEntriesModule } from './modules/admin-entries/admin-entries.module
 import { BankStatementsModule } from './modules/bank-statements/bank-statements.module';
 import { ReconciliationModule } from './modules/reconciliation/reconciliation.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { WorkspacesModule } from './modules/workspaces/workspaces.module';
+import { BeneficiariesModule } from './modules/beneficiaries/beneficiaries.module';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     }),
     PrismaModule,
     AuditModule,
+    WorkspacesModule,
     HealthModule,
     UpiModule,
     EventsModule,
@@ -39,6 +42,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     AdminEventsModule,
     AdminEntriesModule,
     BankStatementsModule,
+    BeneficiariesModule,
     ReportsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

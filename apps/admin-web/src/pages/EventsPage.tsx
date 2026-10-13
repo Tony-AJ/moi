@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { api, formatDate, formatInr, type EventSummary } from '../lib/api';
+import {
+  api,
+  formatDate,
+  formatInr,
+  type BeneficiaryAccount,
+  type EventSummary,
+} from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useEventScope } from '../lib/scope';
 
@@ -66,6 +72,270 @@ function GuestQr({ event }: { event: EventSummary }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Payment accounts for the workspace.
+ *
+ * A UPI id typed into a form is not evidence that the account belongs to the
+ * customer, so a new account starts unconfirmed and cannot collect anything
+ * until the owner confirms the details. Reconciliation against the real bank
+ * statement is what later proves the money arrived.
+ */
+function BeneficiaryPanel({
+  events,
+  onChanged,
+}: {
+  events: EventSummary[];
+  onChanged: () => Promise<void>;
+}) {
+  const [accounts, setAccounts] = useState<BeneficiaryAccount[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+
+  const [label, setLabel] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [payeeName, setPayeeName] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [accountLast4, setAccountLast4] = useState('');
+
+  const [assignEventId, setAssignEventId] = useState('');
+  const [assignAccountId, setAssignAccountId] = useState('');
+
+  async function load() {
+    try {
+      setAccounts(await api.beneficiaries());
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load payment accounts');
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function addAccount(formEvent: React.FormEvent) {
+    formEvent.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createBeneficiary({
+        label,
+        upiId,
+        payeeName,
+        bankName: bankName || undefined,
+        accountLast4: accountLast4 || undefined,
+      });
+      setLabel('');
+      setUpiId('');
+      setPayeeName('');
+      setBankName('');
+      setAccountLast4('');
+      setShowForm(false);
+      await load();
+    } catch (addError) {
+      setError(addError instanceof Error ? addError.message : 'Could not add the account');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.confirmBeneficiary(id);
+      await load();
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : 'Could not confirm');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assign(formEvent: React.FormEvent) {
+    formEvent.preventDefault();
+    if (!assignEventId || !assignAccountId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.selectEventBeneficiary(assignEventId, assignAccountId);
+      await Promise.all([load(), onChanged()]);
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : 'Could not set the payee');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <h2>Payment accounts</h2>
+      <p className="muted">
+        Contributions go straight to the account configured here. Confirm the details before an
+        event uses it.
+      </p>
+
+      {error ? <div className="alert err">{error}</div> : null}
+
+      {accounts.length ? (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>UPI id</th>
+              <th>Payee</th>
+              <th>Status</th>
+              <th>Events</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map((account) => (
+              <tr key={account.id}>
+                <td>{account.label}</td>
+                <td>{account.upiId}</td>
+                <td>{account.payeeName}</td>
+                <td>{account.status === 'CONFIRMED' ? 'Confirmed' : 'Not confirmed'}</td>
+                <td>{account._count.paymentConfigs}</td>
+                <td>
+                  {account.status === 'CONFIRMED' ? null : (
+                    <button
+                      className="btn small"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => confirm(account.id)}
+                    >
+                      Confirm details
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="alert info">No payment account configured yet.</div>
+      )}
+
+      {showForm ? (
+        <form className="form" onSubmit={addAccount}>
+          <div className="row">
+            <div className="grow">
+              <label htmlFor="ben-label">Label</label>
+              <input
+                id="ben-label"
+                value={label}
+                required
+                placeholder="Primary collection account"
+                onChange={(domEvent) => setLabel(domEvent.target.value)}
+              />
+            </div>
+            <div className="grow">
+              <label htmlFor="ben-upi">UPI id</label>
+              <input
+                id="ben-upi"
+                value={upiId}
+                required
+                placeholder="name@okicici"
+                onChange={(domEvent) => setUpiId(domEvent.target.value)}
+              />
+            </div>
+          </div>
+          <div className="row">
+            <div className="grow">
+              <label htmlFor="ben-payee">Payee name</label>
+              <input
+                id="ben-payee"
+                value={payeeName}
+                required
+                onChange={(domEvent) => setPayeeName(domEvent.target.value)}
+              />
+            </div>
+            <div className="grow">
+              <label htmlFor="ben-bank">Bank (optional)</label>
+              <input
+                id="ben-bank"
+                value={bankName}
+                onChange={(domEvent) => setBankName(domEvent.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="ben-last4">Last 4 digits (optional)</label>
+              <input
+                id="ben-last4"
+                value={accountLast4}
+                maxLength={4}
+                inputMode="numeric"
+                onChange={(domEvent) => setAccountLast4(domEvent.target.value)}
+              />
+            </div>
+          </div>
+          <p className="muted">
+            Only the last four digits are stored, and only to help identify which account an
+            uploaded statement came from.
+          </p>
+          <div className="row">
+            <button className="btn" type="submit" disabled={busy}>
+              {busy ? 'Saving...' : 'Add account'}
+            </button>
+            <button className="btn secondary" type="button" onClick={() => setShowForm(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button className="btn secondary" type="button" onClick={() => setShowForm(true)}>
+          + Add payment account
+        </button>
+      )}
+
+      <h3 style={{ marginTop: 20 }}>Set the payee for an event</h3>
+      <p className="muted">
+        Changing this starts a new configuration version. Contributions already recorded keep the
+        payee they were collected against.
+      </p>
+      <form className="toolbar" onSubmit={assign}>
+        <div className="grow">
+          <label htmlFor="assign-event">Event</label>
+          <select
+            id="assign-event"
+            value={assignEventId}
+            onChange={(domEvent) => setAssignEventId(domEvent.target.value)}
+          >
+            <option value="">Select an event</option>
+            {events.map((event) => (
+              <option key={event.id} value={event.id}>
+                {event.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grow">
+          <label htmlFor="assign-account">Payment account</label>
+          <select
+            id="assign-account"
+            value={assignAccountId}
+            onChange={(domEvent) => setAssignAccountId(domEvent.target.value)}
+          >
+            <option value="">Select a confirmed account</option>
+            {accounts
+              .filter((account) => account.status === 'CONFIRMED')
+              .map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.label} ({account.upiId})
+                </option>
+              ))}
+          </select>
+        </div>
+        <button className="btn" type="submit" disabled={busy || !assignEventId || !assignAccountId}>
+          Set payee
+        </button>
+      </form>
     </div>
   );
 }
@@ -141,6 +411,8 @@ export function EventsPage() {
       </p>
 
       {error ? <div className="alert err">{error}</div> : null}
+
+      <BeneficiaryPanel events={events} onChanged={reload} />
 
       {isOwner ? (
         <div className="panel">
@@ -288,8 +560,10 @@ export function EventsPage() {
           <GuestQr event={event} />
 
           <p className="muted" style={{ marginTop: 12 }}>
-            UPI payee: {event.upiId ?? 'server default'}
-            {event.upiPayeeName ? ' (' + event.upiPayeeName + ')' : ''}
+            UPI payee:{' '}
+            {event.upiId
+              ? event.upiId + (event.upiPayeeName ? ' (' + event.upiPayeeName + ')' : '')
+              : 'not configured - this event cannot take online payments yet'}
           </p>
         </div>
       ))}

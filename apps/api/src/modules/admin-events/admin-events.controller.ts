@@ -1,38 +1,65 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { AdminEventsService } from './admin-events.service';
 import { CreateEventDto, UpdateEventDto } from './dto/event.dto';
 import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
+import { WorkspaceAccessService } from '../workspaces/workspace-access.service';
 
 @Controller('admin/events')
 @UseGuards(AdminAuthGuard)
 export class AdminEventsController {
-  constructor(private readonly events: AdminEventsService) {}
+  constructor(
+    private readonly events: AdminEventsService,
+    private readonly access: WorkspaceAccessService,
+  ) {}
 
   @Get()
-  list() {
-    return this.events.list();
+  async list(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Query('workspaceId') workspaceId?: string,
+  ) {
+    const scope = await this.access.resolveScope(admin, workspaceId);
+    return this.events.list(scope);
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.events.get(id);
+  async get(@Param('id') id: string, @CurrentAdmin() admin: AdminPrincipal) {
+    const scope = await this.access.assertEventAccess(admin, id);
+    return this.events.get(id, scope);
   }
 
   @Post()
-  @Roles('OWNER')
-  create(@Body() dto: CreateEventDto, @CurrentAdmin() admin: AdminPrincipal) {
-    return this.events.create(dto, admin.id);
+  async create(
+    @Body() dto: CreateEventDto & { workspaceId?: string },
+    @CurrentAdmin() admin: AdminPrincipal,
+  ) {
+    const scope = await this.access.resolveScope(admin, dto.workspaceId);
+    if (scope.role === 'EVENT_STAFF') {
+      throw new ForbiddenException('Only a workspace owner or admin can create events');
+    }
+    return this.events.create(dto, admin.id, scope);
   }
 
   @Patch(':id')
-  @Roles('OWNER')
-  update(
+  async update(
     @Param('id') id: string,
     @Body() dto: UpdateEventDto,
     @CurrentAdmin() admin: AdminPrincipal,
   ) {
-    return this.events.update(id, dto, admin.id);
+    const scope = await this.access.assertEventAccess(admin, id);
+    if (scope.role === 'EVENT_STAFF') {
+      throw new ForbiddenException('Only a workspace owner or admin can change an event');
+    }
+    return this.events.update(id, dto, admin.id, scope);
   }
 }

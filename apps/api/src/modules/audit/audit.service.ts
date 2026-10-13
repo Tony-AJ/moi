@@ -4,6 +4,13 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 export interface AuditInput {
   adminUserId?: string | null;
+  /** Workspace the action touched; null for platform-level actions. */
+  workspaceId?: string | null;
+  /**
+   * Set when a platform operator reached into a customer workspace. This is
+   * what makes a platform-wide role auditable instead of silent.
+   */
+  isSupportAccess?: boolean;
   action: string;
   entityType: string;
   entityId?: string | null;
@@ -23,6 +30,8 @@ export class AuditService {
       await this.prisma.auditLog.create({
         data: {
           adminUserId: input.adminUserId ?? null,
+          workspaceId: input.workspaceId ?? null,
+          isSupportAccess: input.isSupportAccess ?? false,
           action: input.action,
           entityType: input.entityType,
           entityId: input.entityId ?? null,

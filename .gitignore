@@ -10,3 +10,8 @@ coverage/
 .vite/
 tmp/
 uploads/
+
+# Database dumps: contain password hashes and guest personal data.
+.backups/
+*.dump
+*.sql.gz
