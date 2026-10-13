@@ -1,6 +1,18 @@
 import { IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class CreateBeneficiaryDto {
+  /**
+   * Which workspace to create the account in. Only a request: the server
+   * resolves the caller's membership and uses that.
+   *
+   * It is declared here rather than intersected onto the parameter type,
+   * because an intersection makes TypeScript emit Object as the parameter
+   * type and the ValidationPipe then skips the body entirely.
+   */
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @IsString()
   @Length(2, 60)
   label!: string;

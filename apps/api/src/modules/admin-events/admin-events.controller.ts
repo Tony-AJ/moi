@@ -40,7 +40,7 @@ export class AdminEventsController {
 
   @Post()
   async create(
-    @Body() dto: CreateEventDto & { workspaceId?: string },
+    @Body() dto: CreateEventDto,
     @CurrentAdmin() admin: AdminPrincipal,
   ) {
     const scope = await this.access.resolveScope(admin, dto.workspaceId);

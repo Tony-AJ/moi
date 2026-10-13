@@ -4,6 +4,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { JwtModule } from '@nestjs/jwt';
 import { APP_GUARD } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
+import { throttleConfig } from './common/throttle.config';
 import { AuditModule } from './modules/audit/audit.module';
 import { HealthModule } from './modules/health/health.module';
 import { EventsModule } from './modules/events/events.module';
@@ -22,7 +23,9 @@ import { BeneficiariesModule } from './modules/beneficiaries/beneficiaries.modul
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     // Baseline limit for every route; sensitive routes tighten it locally.
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
+    ThrottlerModule.forRoot([
+      { ttl: throttleConfig.globalTtlMs, limit: throttleConfig.globalLimit },
+    ]),
     JwtModule.registerAsync({
       global: true,
       useFactory: () => ({

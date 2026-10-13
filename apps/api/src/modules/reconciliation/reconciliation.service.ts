@@ -10,6 +10,17 @@ export interface MatchOptions {
   dateWindowDaysAfter?: number;
   /** Allow a reference-less amount+date match to be flagged for review. */
   enableAmountFallback?: boolean;
+  /**
+   * Whether a run with no candidates may move the entry to NOT_FOUND.
+   *
+   * False for the opportunistic match that runs the moment a guest submits
+   * their reference. At that point the statement containing the credit has
+   * almost certainly not been uploaded yet, so "not found in the statement"
+   * would be a false alarm shown to someone who has just paid correctly.
+   * NOT_FOUND is only meaningful as the outcome of matching against a
+   * statement an operator has actually imported.
+   */
+  canMarkNotFound?: boolean;
 }
 
 export interface EntryMatchResult {
@@ -39,6 +50,7 @@ const DEFAULTS: Required<MatchOptions> = {
   dateWindowDaysBefore: 2,
   dateWindowDaysAfter: 14,
   enableAmountFallback: true,
+  canMarkNotFound: true,
 };
 
 @Injectable()
@@ -212,6 +224,21 @@ export class ReconciliationService {
     }
 
     // --- No candidates ------------------------------------------------------
+    if (!opts.canMarkNotFound) {
+      // Leave the entry pending rather than telling a guest who has just
+      // paid that their payment could not be found.
+      return {
+        entryId: entry.id,
+        entryCode: entry.entryCode,
+        status: previousStatus,
+        previousStatus,
+        changed: false,
+        reason:
+          'No matching credit yet. The statement covering this payment has probably not been imported.',
+        candidateCount: 0,
+      };
+    }
+
     return this.applyStatus(entry.id, entry.entryCode, previousStatus, 'NOT_FOUND', {
       reason:
         'No matching credit in the imported statements. The statement may be incomplete or the payment may not have settled yet.',

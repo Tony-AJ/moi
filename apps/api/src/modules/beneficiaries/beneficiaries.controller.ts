@@ -21,7 +21,7 @@ export class BeneficiariesController {
 
   @Post()
   async create(
-    @Body() dto: CreateBeneficiaryDto & { workspaceId?: string },
+    @Body() dto: CreateBeneficiaryDto,
     @CurrentAdmin() admin: AdminPrincipal,
     @Ip() ip: string,
   ) {

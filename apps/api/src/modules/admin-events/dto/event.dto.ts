@@ -13,6 +13,16 @@ import {
 } from 'class-validator';
 
 export class CreateEventDto {
+  /**
+   * Which workspace to create the event in. Only a request; the server uses
+   * the caller's membership. Declared on the DTO rather than intersected
+   * onto the parameter type, because an intersection makes TypeScript emit
+   * Object and the ValidationPipe then validates nothing at all.
+   */
+  @IsOptional()
+  @IsString()
+  workspaceId?: string;
+
   @IsString()
   @Length(3, 160)
   name!: string;

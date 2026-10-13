@@ -239,8 +239,11 @@ export class EntriesService {
 
     // Opportunistic match: if the statement containing this credit was already
     // imported, the entry can verify immediately. Otherwise it stays pending.
+    // canMarkNotFound is false so a guest who has just paid is never shown
+    // "not found in the statement" merely because nothing has been imported
+    // yet; only an operator's reconciliation run can reach that conclusion.
     try {
-      await this.reconciliation.matchEntry(entry.id);
+      await this.reconciliation.matchEntry(entry.id, { canMarkNotFound: false });
     } catch {
       // Matching is best-effort here; the admin can always re-run it.
     }
