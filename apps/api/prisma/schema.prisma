@@ -42,67 +42,330 @@ enum TxnDirection {
   DEBIT
 }
 
+/// Legacy flat role. Kept only so the pre-multi-tenant code paths keep
+/// compiling during the migration; WorkspaceRole is the real authority.
+/// Dropped in step C once every service reads memberships.
 enum AdminRole {
   OWNER
   STAFF
 }
 
-model Event {
-  id              String   @id @default(cuid())
-  slug            String   @unique
-  name            String
-  hostName        String?
-  eventDate       DateTime
-  venue           String?
-  /// UPI beneficiary for this event. Falls back to DEFAULT_UPI_ID when null.
-  upiId           String?
-  upiPayeeName    String?
-  /// Suggested amounts shown as quick-pick chips on the guest form (paise).
-  suggestedAmounts Int[]   @default([])
-  minAmountPaise  Int      @default(100)
-  maxAmountPaise  Int      @default(10000000)
-  collectPhone    Boolean  @default(false)
-  requirePhone    Boolean  @default(false)
-  /// When false the public guest form is closed (event over / paused).
-  isOpen          Boolean  @default(true)
-  /// Monotonic per-event counter used to build MOI-000123 codes.
-  entrySequence   Int      @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+/// Platform-wide capability, independent of any workspace.
+/// SUPER_ADMIN manages workspaces and account status. It does NOT grant
+/// read access to a workspace's guest data; that still requires a
+/// membership, and support access is recorded in audit_logs.
+enum PlatformRole {
+  USER
+  SUPER_ADMIN
+}
 
-  entries          MoiEntry[]
+/// A user's role inside one workspace. A user may hold a different role in
+/// every workspace they belong to.
+enum WorkspaceRole {
+  WORKSPACE_OWNER
+  WORKSPACE_ADMIN
+  EVENT_STAFF
+}
+
+enum WorkspaceStatus {
+  /// Created by super admin, owner has not activated it yet.
+  PENDING
+  ACTIVE
+  /// Suspended by super admin: guest forms close, admin writes are refused.
+  SUSPENDED
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  REVOKED
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+/// A configured UPI id is not proof of ownership. An event may only be
+/// published against a CONFIRMED beneficiary.
+enum BeneficiaryStatus {
+  UNCONFIRMED
+  CONFIRMED
+  DISABLED
+}
+
+/// One customer. Every event, beneficiary, entry, statement and transaction
+/// belongs to exactly one workspace, and isolation is enforced in the service
+/// layer from the caller's membership, never from an id sent by the browser.
+model Workspace {
+  id     String          @id @default(cuid())
+  /// Stable handle used in admin URLs. Guest URLs stay event-scoped.
+  slug   String          @unique
+  name   String
+  status WorkspaceStatus @default(PENDING)
+
+  contactEmail String?
+  contactPhone String?
+  notes        String?
+
+  /// Super admin who provisioned the workspace.
+  createdByUserId String?
+  suspendedAt     DateTime?
+  suspendedReason String?
+  activatedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdByUser    AdminUser?            @relation("workspacesCreated", fields: [createdByUserId], references: [id])
+  members          WorkspaceMember[]
+  invites          WorkspaceInvite[]
+  events           Event[]
+  beneficiaries    BeneficiaryAccount[]
+  statementImports BankStatementImport[]
+  bankTransactions BankTransaction[]
+  auditLogs        AuditLog[]
+
+  @@index([status])
+  @@map("workspaces")
+}
+
+/// Membership is the unit of authorization. Holding a membership in one
+/// workspace grants nothing in any other workspace.
+model WorkspaceMember {
+  id          String           @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  status      MembershipStatus @default(ACTIVE)
+
+  invitedByUserId String?
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user          AdminUser  @relation("memberships", fields: [userId], references: [id], onDelete: Cascade)
+  invitedByUser AdminUser? @relation("membershipsInvited", fields: [invitedByUserId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([userId, status])
+  @@index([workspaceId, role])
+  @@map("workspace_members")
+}
+
+/// Pending invitation to join a workspace. Only the sha256 of the emailed
+/// token is stored, so a database read cannot be replayed as an invite link.
+model WorkspaceInvite {
+  id          String        @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole
+  status      InviteStatus  @default(PENDING)
+
+  tokenHash String   @unique
+  expiresAt DateTime
+
+  invitedByUserId  String?
+  acceptedByUserId String?
+  acceptedAt       DateTime?
+  revokedAt        DateTime?
+
+  /// Events the invitee is granted on acceptance (EVENT_STAFF invites).
+  grantedEventIds String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace      Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedByUser  AdminUser? @relation("invitesSent", fields: [invitedByUserId], references: [id])
+  acceptedByUser AdminUser? @relation("invitesAccepted", fields: [acceptedByUserId], references: [id])
+
+  @@unique([workspaceId, email, status])
+  @@index([email])
+  @@map("workspace_invites")
+}
+
+/// Event-level grant for EVENT_STAFF. A workspace owner or admin reaches
+/// every event in their own workspace without a row here; staff do not.
+model EventMember {
+  id      String @id @default(cuid())
+  eventId String
+  userId  String
+
+  canRecordEntries    Boolean @default(true)
+  canUploadStatements Boolean @default(false)
+  canResolveReviews   Boolean @default(false)
+  canExportReports    Boolean @default(false)
+
+  assignedByUserId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  event          Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user           AdminUser  @relation("eventAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  assignedByUser AdminUser? @relation("eventAssignmentsMade", fields: [assignedByUserId], references: [id])
+
+  @@unique([eventId, userId])
+  @@index([userId])
+  @@map("event_members")
+}
+
+/// A customer-configured UPI destination. Deliberately stores no full
+/// account number: a label, the VPA, the payee name and at most the last
+/// four digits for statement identification.
+model BeneficiaryAccount {
+  id           String            @id @default(cuid())
+  workspaceId  String
+  label        String
+  upiId        String
+  payeeName    String
+  bankName     String?
+  /// Last four digits only, for matching an uploaded statement to the
+  /// account it came from. Never the full number.
+  accountLast4 String?
+  status       BeneficiaryStatus @default(UNCONFIRMED)
+
+  /// The owner confirming the details is the only ownership evidence in v1;
+  /// statement reconciliation supplies the proof of actual receipt.
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  confirmedByUser  AdminUser?            @relation("beneficiariesConfirmed", fields: [confirmedByUserId], references: [id])
+  paymentConfigs   EventPaymentConfig[]
   statementImports BankStatementImport[]
   bankTransactions BankTransaction[]
 
+  @@unique([workspaceId, upiId])
+  @@index([workspaceId, status])
+  @@map("beneficiary_accounts")
+}
+
+/// Immutable snapshot of the beneficiary chosen for an event. Selecting a
+/// different beneficiary creates a new version; existing Moi entries keep
+/// pointing at the version that was active when the guest registered, so a
+/// later change never rewrites payment history.
+model EventPaymentConfig {
+  id                   String @id @default(cuid())
+  eventId              String
+  beneficiaryAccountId String
+  version              Int
+
+  /// Copied from the beneficiary at creation time. Frozen on purpose.
+  upiIdSnapshot     String
+  payeeNameSnapshot String
+
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  event              Event              @relation("eventPaymentConfigs", fields: [eventId], references: [id], onDelete: Cascade)
+  beneficiaryAccount BeneficiaryAccount @relation(fields: [beneficiaryAccountId], references: [id])
+  createdByUser      AdminUser?         @relation("paymentConfigsCreated", fields: [createdByUserId], references: [id])
+
+  /// Back-reference from Event.activePaymentConfigId.
+  activeForEvent Event?     @relation("eventActivePaymentConfig")
+  entries        MoiEntry[]
+
+  @@unique([eventId, version])
+  @@index([beneficiaryAccountId])
+  @@map("event_payment_configs")
+}
+
+model Event {
+  id                    String   @id @default(cuid())
+  /// Owning customer. Nullable only for the duration of step A; step C makes
+  /// it required once the backfill has run.
+  workspaceId           String?
+  slug                  String   @unique
+  name                  String
+  hostName              String?
+  eventDate             DateTime
+  venue                 String?
+  /// DEPRECATED: superseded by EventPaymentConfig. Read-only shadow columns
+  /// kept for one release so a rollback keeps working; dropped in step C.
+  /// Never fall back to a platform-wide default here - that would route a
+  /// customer's guest payments into the platform's own account.
+  upiId                 String?
+  upiPayeeName          String?
+  /// Beneficiary snapshot currently handed to new guests.
+  activePaymentConfigId String?  @unique
+  /// Suggested amounts shown as quick-pick chips on the guest form (paise).
+  suggestedAmounts      Int[]    @default([])
+  minAmountPaise        Int      @default(100)
+  maxAmountPaise        Int      @default(10000000)
+  collectPhone          Boolean  @default(false)
+  requirePhone          Boolean  @default(false)
+  /// When false the public guest form is closed (event over / paused).
+  isOpen                Boolean  @default(true)
+  /// Monotonic per-event counter used to build MOI-000123 codes.
+  entrySequence         Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  workspace           Workspace?            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  activePaymentConfig EventPaymentConfig?   @relation("eventActivePaymentConfig", fields: [activePaymentConfigId], references: [id])
+  paymentConfigs      EventPaymentConfig[]  @relation("eventPaymentConfigs")
+  eventMembers        EventMember[]
+  entries             MoiEntry[]
+  statementImports    BankStatementImport[]
+  bankTransactions    BankTransaction[]
+
+  @@index([workspaceId])
   @@map("events")
 }
 
+/// Login identity only. What a user may do comes from their workspace
+/// memberships and event assignments, never from this row alone - the one
+/// exception being platformRole, which is scoped to platform operations.
 model AdminUser {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String       @id @default(cuid())
+  email        String       @unique
   passwordHash String
   name         String
-  role         AdminRole @default(STAFF)
-  isActive     Boolean   @default(true)
+  /// DEPRECATED: flat role from the single-tenant version. Dropped in step C.
+  role         AdminRole    @default(STAFF)
+  platformRole PlatformRole @default(USER)
+  isActive     Boolean      @default(true)
   lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   auditLogs        AuditLog[]
   recordedEntries  MoiEntry[]            @relation("recordedBy")
   verifiedEntries  MoiEntry[]            @relation("verifiedBy")
   statementImports BankStatementImport[]
 
+  memberships            WorkspaceMember[]    @relation("memberships")
+  membershipsInvited     WorkspaceMember[]    @relation("membershipsInvited")
+  workspacesCreated      Workspace[]          @relation("workspacesCreated")
+  invitesSent            WorkspaceInvite[]    @relation("invitesSent")
+  invitesAccepted        WorkspaceInvite[]    @relation("invitesAccepted")
+  eventAssignments       EventMember[]        @relation("eventAssignments")
+  eventAssignmentsMade   EventMember[]        @relation("eventAssignmentsMade")
+  beneficiariesConfirmed BeneficiaryAccount[] @relation("beneficiariesConfirmed")
+  paymentConfigsCreated  EventPaymentConfig[] @relation("paymentConfigsCreated")
+
   @@map("admin_users")
 }
 
 model MoiEntry {
-  id         String @id @default(cuid())
-  eventId    String
+  id          String @id @default(cuid())
+  eventId     String
   /// Per-event running number (1,2,3...).
   entryNumber Int
   /// Human readable receipt code, e.g. MOI-000123.
-  entryCode  String
+  entryCode   String
 
   guestName    String
   guestAddress String?
@@ -112,6 +375,12 @@ model MoiEntry {
 
   paymentMethod PaymentMethod @default(UPI)
   paymentStatus PaymentStatus @default(AWAITING_VERIFICATION)
+
+  /// Beneficiary snapshot the guest was actually handed off to. Set at
+  /// creation and never updated, so changing the event's beneficiary later
+  /// cannot rewrite where this contribution was sent. Null for CASH and for
+  /// rows created before the migration.
+  paymentConfigId String?
 
   /// Opaque token handed to the guest so the public status endpoint never
   /// exposes a database id.
@@ -130,9 +399,10 @@ model MoiEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  event            Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  recordedByAdmin  AdminUser?        @relation("recordedBy", fields: [recordedByAdminId], references: [id])
-  verifiedByAdmin  AdminUser?        @relation("verifiedBy", fields: [verifiedByAdminId], references: [id])
+  event            Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  paymentConfig    EventPaymentConfig? @relation(fields: [paymentConfigId], references: [id])
+  recordedByAdmin  AdminUser?          @relation("recordedBy", fields: [recordedByAdminId], references: [id])
+  verifiedByAdmin  AdminUser?          @relation("verifiedBy", fields: [verifiedByAdminId], references: [id])
   paymentClaims    PaymentClaim[]
   bankTransactions BankTransaction[]
 
@@ -150,7 +420,7 @@ model PaymentClaim {
   entryId String
 
   /// Raw value as typed by the guest.
-  utr String
+  utr           String
   /// Uppercased, non-alphanumerics stripped. Globally unique so the same UTR
   /// cannot be claimed against two different entries.
   utrNormalized String @unique
@@ -164,7 +434,7 @@ model PaymentClaim {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  entry               MoiEntry         @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  entry                  MoiEntry         @relation(fields: [entryId], references: [id], onDelete: Cascade)
   matchedBankTransaction BankTransaction? @relation(fields: [matchedBankTransactionId], references: [id])
 
   @@index([entryId])
@@ -172,11 +442,20 @@ model PaymentClaim {
 }
 
 model BankStatementImport {
-  id       String  @id @default(cuid())
-  eventId  String?
-  fileName String
+  id                   String  @id @default(cuid())
+  workspaceId          String?
+  /// The account this statement belongs to. An import is scoped to the
+  /// beneficiary account, not to a single event, because one account may
+  /// legitimately receive contributions for several of the workspace's
+  /// events.
+  beneficiaryAccountId String?
+  /// DEPRECATED as a scoping key; retained for display of legacy imports.
+  eventId              String?
+  fileName             String
   /// sha256 of the uploaded bytes; blocks re-importing the same file.
-  fileHash String  @unique
+  /// Step C rescopes this to (workspaceId, fileHash): globally unique leaks
+  /// the existence of another customer's upload.
+  fileHash             String  @unique
 
   totalRows     Int @default(0)
   importedRows  Int @default(0)
@@ -186,21 +465,32 @@ model BankStatementImport {
   uploadedByAdminId String?
   createdAt         DateTime @default(now())
 
-  event            Event?            @relation(fields: [eventId], references: [id], onDelete: SetNull)
-  uploadedByAdmin  AdminUser?        @relation(fields: [uploadedByAdminId], references: [id])
-  bankTransactions BankTransaction[]
+  workspace          Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  beneficiaryAccount BeneficiaryAccount? @relation(fields: [beneficiaryAccountId], references: [id])
+  event              Event?              @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  uploadedByAdmin    AdminUser?          @relation(fields: [uploadedByAdminId], references: [id])
+  bankTransactions   BankTransaction[]
 
+  @@index([workspaceId])
+  @@index([beneficiaryAccountId])
   @@map("bank_statement_imports")
 }
 
 model BankTransaction {
-  id       String  @id @default(cuid())
-  importId String
-  eventId  String?
+  id                   String  @id @default(cuid())
+  importId             String
+  /// Denormalized from the import so every match query can filter on the
+  /// tenant without a join. Both are set together or not at all.
+  workspaceId          String?
+  beneficiaryAccountId String?
+  /// DEPRECATED as a scoping key. A null eventId used to mean "matches any
+  /// event", which is exactly the cross-tenant hole being closed: matching
+  /// is scoped by beneficiaryAccountId from step B onward.
+  eventId              String?
 
-  txnDate     DateTime
-  valueDate   DateTime?
-  description String
+  txnDate       DateTime
+  valueDate     DateTime?
+  description   String
   /// Reference / UTR as printed on the statement.
   reference     String?
   /// Normalized reference used for matching.
@@ -219,30 +509,43 @@ model BankTransaction {
 
   createdAt DateTime @default(now())
 
-  import       BankStatementImport @relation(fields: [importId], references: [id], onDelete: Cascade)
-  event        Event?              @relation(fields: [eventId], references: [id], onDelete: SetNull)
-  matchedEntry MoiEntry?           @relation(fields: [matchedEntryId], references: [id])
-  paymentClaim PaymentClaim?
+  import             BankStatementImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  workspace          Workspace?          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  beneficiaryAccount BeneficiaryAccount? @relation(fields: [beneficiaryAccountId], references: [id])
+  event              Event?              @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  matchedEntry       MoiEntry?           @relation(fields: [matchedEntryId], references: [id])
+  paymentClaim       PaymentClaim?
 
   @@index([refNormalized])
   @@index([amountPaise, direction])
   @@index([txnDate])
+  @@index([beneficiaryAccountId, direction, matchedEntryId])
+  @@index([workspaceId])
   @@map("bank_transactions")
 }
 
 model AuditLog {
-  id          String   @id @default(cuid())
-  adminUserId String?
-  action      String
-  entityType  String
-  entityId    String?
-  metadata    Json?
-  ip          String?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(cuid())
+  adminUserId     String?
+  /// Workspace the action touched. Null for platform-level actions such as
+  /// login or workspace provisioning.
+  workspaceId     String?
+  action          String
+  entityType      String
+  entityId        String?
+  /// True when a SUPER_ADMIN reached into a customer workspace. These rows
+  /// are what makes platform-wide access auditable rather than silent.
+  isSupportAccess Boolean  @default(false)
+  metadata        Json?
+  ip              String?
+  createdAt       DateTime @default(now())
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id])
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
 
   @@index([entityType, entityId])
   @@index([createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([isSupportAccess, createdAt])
   @@map("audit_logs")
 }
