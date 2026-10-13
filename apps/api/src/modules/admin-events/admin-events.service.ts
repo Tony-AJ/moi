@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateEventDto, UpdateEventDto } from './dto/event.dto';
 import { slugify } from '../../common/utils/token.util';
+import type { WorkspaceScope } from '../workspaces/workspace-access.service';
 
 @Injectable()
 export class AdminEventsService {
@@ -13,11 +14,24 @@ export class AdminEventsService {
     private readonly config: ConfigService,
   ) {}
 
-  async list() {
-    const events = await this.prisma.event.findMany({ orderBy: { eventDate: 'desc' } });
+  async list(scope: WorkspaceScope) {
+    // Staff see only the events they are assigned to; owners and workspace
+    // admins see every event in their own workspace and nothing beyond it.
+    const where =
+      scope.eventIds !== null
+        ? { id: { in: scope.eventIds } }
+        : { workspaceId: scope.workspaceId };
 
+    const events = await this.prisma.event.findMany({
+      where,
+      orderBy: { eventDate: 'desc' },
+    });
+
+    // The totals must be aggregated over the same event set, otherwise a
+    // dashboard figure could include another customer's contributions.
     const grouped = await this.prisma.moiEntry.groupBy({
       by: ['eventId', 'paymentStatus'],
+      where: { eventId: { in: events.map((event) => event.id) } },
       _count: { _all: true },
       _sum: { amountPaise: true },
     });
@@ -45,13 +59,15 @@ export class AdminEventsService {
     });
   }
 
-  async get(id: string) {
-    const event = await this.prisma.event.findUnique({ where: { id } });
+  async get(id: string, scope: WorkspaceScope) {
+    const event = await this.prisma.event.findFirst({
+      where: { id, workspaceId: scope.workspaceId },
+    });
     if (!event) throw new NotFoundException('Event not found');
     return { ...event, guestUrl: this.guestUrl(event.slug) };
   }
 
-  async create(dto: CreateEventDto, adminId: string) {
+  async create(dto: CreateEventDto, adminId: string, scope: WorkspaceScope) {
     const slug = dto.slug ?? (await this.uniqueSlug(dto.name));
     const minAmountPaise = dto.minAmountPaise ?? 100;
     const maxAmountPaise = dto.maxAmountPaise ?? 10_000_000;
@@ -64,6 +80,7 @@ export class AdminEventsService {
 
     const event = await this.prisma.event.create({
       data: {
+        workspaceId: scope.workspaceId,
         slug,
         name: dto.name,
         hostName: dto.hostName || null,
@@ -84,14 +101,19 @@ export class AdminEventsService {
       action: 'EVENT_CREATED',
       entityType: 'Event',
       entityId: event.id,
+      workspaceId: scope.workspaceId,
       metadata: { slug: event.slug, name: event.name },
     });
 
     return { ...event, guestUrl: this.guestUrl(event.slug) };
   }
 
-  async update(id: string, dto: UpdateEventDto, adminId: string) {
-    const existing = await this.prisma.event.findUnique({ where: { id } });
+  async update(id: string, dto: UpdateEventDto, adminId: string, scope: WorkspaceScope) {
+    // Scoped read, so an id belonging to another workspace is a 404 here
+    // rather than an update.
+    const existing = await this.prisma.event.findFirst({
+      where: { id, workspaceId: scope.workspaceId },
+    });
     if (!existing) throw new NotFoundException('Event not found');
 
     const min = dto.minAmountPaise ?? existing.minAmountPaise;
@@ -121,6 +143,7 @@ export class AdminEventsService {
       action: 'EVENT_UPDATED',
       entityType: 'Event',
       entityId: id,
+      workspaceId: scope.workspaceId,
       metadata: { ...dto },
     });
 

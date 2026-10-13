@@ -108,6 +108,30 @@ export interface BankTransactionRow {
   referenceMatches?: boolean;
 }
 
+export interface BeneficiaryAccount {
+  id: string;
+  label: string;
+  upiId: string;
+  payeeName: string;
+  bankName: string | null;
+  accountLast4: string | null;
+  status: 'UNCONFIRMED' | 'CONFIRMED' | 'DISABLED';
+  confirmedAt: string | null;
+  createdAt: string;
+  _count: { paymentConfigs: number; statementImports: number };
+}
+
+export interface EventPaymentConfig {
+  id: string;
+  version: number;
+  upiIdSnapshot: string;
+  payeeNameSnapshot: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  beneficiaryAccount: { id: string; label: string; status: string };
+  _count: { entries: number };
+}
+
 export interface ImportResult {
   import: {
     id: string;
@@ -319,9 +343,42 @@ export const api = {
   runReconciliationForEntry: (entryId: string) =>
     request<unknown>('/admin/reconciliation/entries/' + entryId + '/run', { method: 'POST' }),
 
-  importStatement: (file: File, eventId: string, autoReconcile: boolean, force = false) => {
+  beneficiaries: () => request<BeneficiaryAccount[]>('/admin/beneficiaries'),
+
+  createBeneficiary: (body: {
+    label: string;
+    upiId: string;
+    payeeName: string;
+    bankName?: string;
+    accountLast4?: string;
+  }) => request<BeneficiaryAccount>('/admin/beneficiaries', { method: 'POST', body }),
+
+  confirmBeneficiary: (id: string) =>
+    request<BeneficiaryAccount>('/admin/beneficiaries/' + id + '/confirm', { method: 'POST' }),
+
+  selectEventBeneficiary: (eventId: string, beneficiaryAccountId: string) =>
+    request<EventPaymentConfig>('/admin/beneficiaries/events/' + eventId + '/select', {
+      method: 'POST',
+      body: { beneficiaryAccountId },
+    }),
+
+  eventBeneficiaryHistory: (eventId: string) =>
+    request<EventPaymentConfig[]>('/admin/beneficiaries/events/' + eventId + '/history'),
+
+  /**
+   * The statement has to say which account it came from: that is what
+   * decides which contributions its credits may settle.
+   */
+  importStatement: (
+    file: File,
+    beneficiaryAccountId: string,
+    eventId: string,
+    autoReconcile: boolean,
+    force = false,
+  ) => {
     const form = new FormData();
     form.append('file', file);
+    form.append('beneficiaryAccountId', beneficiaryAccountId);
     if (eventId) form.append('eventId', eventId);
     form.append('autoReconcile', String(autoReconcile));
     form.append('force', String(force));

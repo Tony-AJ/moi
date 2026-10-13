@@ -5,6 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AdminEntriesService } from '../admin-entries/admin-entries.service';
 import { QueryEntriesDto } from '../admin-entries/dto/query-entries.dto';
 import { formatInr } from '../../common/utils/money.util';
+import type { WorkspaceScope } from '../workspaces/workspace-access.service';
 
 const STATUS_LABEL: Record<string, string> = {
   AWAITING_VERIFICATION: 'Awaiting verification',
@@ -21,8 +22,8 @@ export class ReportsService {
     private readonly adminEntries: AdminEntriesService,
   ) {}
 
-  private async loadReportData(query: QueryEntriesDto) {
-    const where = this.adminEntries.buildWhere(query);
+  private async loadReportData(query: QueryEntriesDto, scope: WorkspaceScope) {
+    const where = this.adminEntries.buildWhere(query, scope);
 
     const [entries, event] = await Promise.all([
       this.prisma.moiEntry.findMany({
@@ -38,7 +39,11 @@ export class ReportsService {
         },
       }),
       query.eventId
-        ? this.prisma.event.findUnique({ where: { id: query.eventId } })
+        ? // Scoped lookup: an event id from another workspace must not
+          // resolve into this report's header.
+          this.prisma.event.findFirst({
+            where: { id: query.eventId, workspaceId: scope.workspaceId },
+          })
         : Promise.resolve(null),
     ]);
 
@@ -70,8 +75,11 @@ export class ReportsService {
     };
   }
 
-  async buildExcel(query: QueryEntriesDto): Promise<{ buffer: Buffer; filename: string }> {
-    const data = await this.loadReportData(query);
+  async buildExcel(
+    query: QueryEntriesDto,
+    scope: WorkspaceScope,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const data = await this.loadReportData(query, scope);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'MoiLedger';
@@ -159,8 +167,11 @@ export class ReportsService {
     return { buffer, filename: this.filename(data.event?.name, 'xlsx') };
   }
 
-  async buildPdf(query: QueryEntriesDto): Promise<{ buffer: Buffer; filename: string }> {
-    const data = await this.loadReportData(query);
+  async buildPdf(
+    query: QueryEntriesDto,
+    scope: WorkspaceScope,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const data = await this.loadReportData(query, scope);
 
     const doc = new PDFDocument({ size: 'A4', margin: 36 });
     const chunks: Buffer[] = [];

@@ -41,7 +41,14 @@ export class AdminAuthGuard implements CanActivate {
 
     const admin = await this.prisma.adminUser.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true, name: true, role: true, isActive: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        platformRole: true,
+        isActive: true,
+      },
     });
 
     if (!admin?.isActive) {
@@ -62,6 +69,7 @@ export class AdminAuthGuard implements CanActivate {
       email: admin.email,
       name: admin.name,
       role: admin.role,
+      platformRole: admin.platformRole,
     };
     return true;
   }

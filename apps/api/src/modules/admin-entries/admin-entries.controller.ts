@@ -8,58 +8,77 @@ import {
 } from './dto/entry-actions.dto';
 import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
+import { WorkspaceAccessService } from '../workspaces/workspace-access.service';
 
 @Controller('admin')
 @UseGuards(AdminAuthGuard)
 export class AdminEntriesController {
-  constructor(private readonly entries: AdminEntriesService) {}
+  constructor(
+    private readonly entries: AdminEntriesService,
+    private readonly access: WorkspaceAccessService,
+  ) {}
 
   @Get('entries')
-  list(@Query() query: QueryEntriesDto) {
-    return this.entries.list(query);
+  async list(@Query() query: QueryEntriesDto, @CurrentAdmin() admin: AdminPrincipal) {
+    const scope = await this.access.resolveScope(admin, query.workspaceId);
+    // Asserted as well as filtered, so a foreign event id is an explicit
+    // refusal rather than a silently empty page.
+    if (query.eventId) await this.access.assertEventAccess(admin, query.eventId);
+    return this.entries.list(query, scope);
   }
 
   @Get('stats')
-  stats(@Query('eventId') eventId?: string) {
-    return this.entries.stats(eventId);
+  async stats(
+    @CurrentAdmin() admin: AdminPrincipal,
+    @Query('eventId') eventId?: string,
+    @Query('workspaceId') workspaceId?: string,
+  ) {
+    const scope = await this.access.resolveScope(admin, workspaceId);
+    if (eventId) await this.access.assertEventAccess(admin, eventId);
+    return this.entries.stats(scope, eventId);
   }
 
   @Get('entries/duplicates')
-  duplicates(@Query('eventId') eventId: string) {
+  async duplicates(@Query('eventId') eventId: string, @CurrentAdmin() admin: AdminPrincipal) {
+    await this.access.assertEventAccess(admin, eventId);
     return this.entries.duplicates(eventId);
   }
 
   @Get('entries/:id')
-  get(@Param('id') id: string) {
+  async get(@Param('id') id: string, @CurrentAdmin() admin: AdminPrincipal) {
+    await this.access.assertEntryAccess(admin, id);
     return this.entries.get(id);
   }
 
   @Post('entries')
-  createManual(
+  async createManual(
     @Body() dto: CreateManualEntryDto,
     @CurrentAdmin() admin: AdminPrincipal,
     @Ip() ip: string,
   ) {
+    await this.access.assertEventAccess(admin, dto.eventId, 'canRecordEntries');
     return this.entries.createManual(dto, admin.id, ip);
   }
 
   @Post('entries/:id/payment-reference')
-  addReference(
+  async addReference(
     @Param('id') id: string,
     @Body() dto: AdminSubmitReferenceDto,
     @CurrentAdmin() admin: AdminPrincipal,
     @Ip() ip: string,
   ) {
+    await this.access.assertEntryAccess(admin, id, 'canRecordEntries');
     return this.entries.addReference(id, dto, admin.id, ip);
   }
 
   @Post('entries/:id/review')
-  review(
+  async review(
     @Param('id') id: string,
     @Body() dto: ReviewEntryDto,
     @CurrentAdmin() admin: AdminPrincipal,
     @Ip() ip: string,
   ) {
+    await this.access.assertEntryAccess(admin, id, 'canResolveReviews');
     return this.entries.review(id, dto, admin.id, ip);
   }
 }

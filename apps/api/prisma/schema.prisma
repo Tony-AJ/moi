@@ -453,9 +453,10 @@ model BankStatementImport {
   eventId              String?
   fileName             String
   /// sha256 of the uploaded bytes; blocks re-importing the same file.
-  /// Step C rescopes this to (workspaceId, fileHash): globally unique leaks
-  /// the existence of another customer's upload.
-  fileHash             String  @unique
+  /// Scoped to the workspace, not global: a global unique would let one
+  /// customer's upload both reveal itself to, and block, another customer
+  /// uploading a byte-identical file.
+  fileHash             String
 
   totalRows     Int @default(0)
   importedRows  Int @default(0)
@@ -471,6 +472,7 @@ model BankStatementImport {
   uploadedByAdmin    AdminUser?          @relation(fields: [uploadedByAdminId], references: [id])
   bankTransactions   BankTransaction[]
 
+  @@unique([workspaceId, fileHash])
   @@index([workspaceId])
   @@index([beneficiaryAccountId])
   @@map("bank_statement_imports")
@@ -499,8 +501,13 @@ model BankTransaction {
   direction     TxnDirection
   balancePaise  BigInt?
 
-  /// sha256 of the normalized row; blocks duplicate rows across imports.
-  rowHash String @unique
+  /// sha256 of the normalized row; blocks duplicate rows across imports of
+  /// the same account. Scoped to the beneficiary account rather than global:
+  /// two customers can legitimately receive an identical date, amount and
+  /// reference combination, and a global unique would make the second
+  /// customer's row vanish behind skipDuplicates, leaving a guest who really
+  /// paid stuck unverified.
+  rowHash String
 
   /// A bank transaction can verify at most ONE Moi entry.
   matchedEntryId String?   @unique
@@ -519,6 +526,7 @@ model BankTransaction {
   @@index([refNormalized])
   @@index([amountPaise, direction])
   @@index([txnDate])
+  @@unique([beneficiaryAccountId, rowHash])
   @@index([beneficiaryAccountId, direction, matchedEntryId])
   @@index([workspaceId])
   @@map("bank_transactions")

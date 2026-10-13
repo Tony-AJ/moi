@@ -25,8 +25,12 @@ export class EventsService {
         collectPhone: true,
         requirePhone: true,
         isOpen: true,
-        upiId: true,
-        upiPayeeName: true,
+        // The payee comes from the event's configured beneficiary snapshot,
+        // never from a platform-wide default.
+        activePaymentConfig: {
+          select: { upiIdSnapshot: true, payeeNameSnapshot: true },
+        },
+        workspace: { select: { status: true } },
       },
     });
 
@@ -34,13 +38,20 @@ export class EventsService {
       throw new NotFoundException('Event not found');
     }
 
-    const { upiId, upiPayeeName, ...rest } = event;
-    const payee = this.upi.resolvePayee({ upiId, upiPayeeName });
+    const { activePaymentConfig, workspace, ...rest } = event;
+    const payee = activePaymentConfig
+      ? {
+          upiId: activePaymentConfig.upiIdSnapshot,
+          upiPayeeName: activePaymentConfig.payeeNameSnapshot,
+        }
+      : { upiId: null, upiPayeeName: null };
 
     return {
       ...rest,
-      upiConfigured: this.upi.isConfigured({ upiId, upiPayeeName }),
-      payeeName: payee.name,
+      // A suspended workspace closes the guest form regardless of isOpen.
+      isOpen: rest.isOpen && (!workspace || workspace.status === 'ACTIVE'),
+      upiConfigured: this.upi.isConfigured(payee),
+      payeeName: this.upi.resolvePayee(payee).name,
     };
   }
 }

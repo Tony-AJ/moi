@@ -6,6 +6,13 @@ import { ReconciliationService } from '../reconciliation/reconciliation.service'
 import { sha256 } from '../../common/utils/token.util';
 
 export interface UploadOptions {
+  /**
+   * The account the statement was downloaded from. Required: an import has
+   * to belong to a known account, because that is what decides which
+   * contributions its credits are allowed to settle. One account may serve
+   * several of the workspace's events, so this is deliberately not an event.
+   */
+  beneficiaryAccountId: string;
   eventId?: string;
   /** Run reconciliation for the event straight after a successful import. */
   autoReconcile?: boolean;
@@ -32,7 +39,20 @@ export class BankStatementsService {
 
     const fileHash = sha256(file.buffer);
 
-    const previous = await this.prisma.bankStatementImport.findUnique({ where: { fileHash } });
+    const account = await this.prisma.beneficiaryAccount.findUnique({
+      where: { id: options.beneficiaryAccountId },
+      select: { id: true, workspaceId: true, status: true, label: true },
+    });
+    if (!account) throw new BadRequestException('Payment account not found');
+    if (account.status === 'DISABLED') {
+      throw new BadRequestException('That payment account is disabled');
+    }
+
+    // Duplicate detection is scoped to the workspace, so the response can
+    // never disclose that some other customer uploaded the same file.
+    const previous = await this.prisma.bankStatementImport.findFirst({
+      where: { fileHash, workspaceId: account.workspaceId },
+    });
     if (previous && !options.force) {
       throw new ConflictException({
         message:
@@ -54,8 +74,16 @@ export class BankStatementsService {
     }
 
     if (options.eventId) {
-      const event = await this.prisma.event.findUnique({ where: { id: options.eventId } });
+      const event = await this.prisma.event.findUnique({
+        where: { id: options.eventId },
+        select: { id: true, workspaceId: true },
+      });
       if (!event) throw new BadRequestException('Event not found');
+      // An event from another workspace must not be attachable to this
+      // import, whatever id the browser sent.
+      if (event.workspaceId !== account.workspaceId) {
+        throw new BadRequestException('That event does not belong to this payment account');
+      }
     }
 
     // Row-level hash makes re-imports and overlapping date ranges idempotent.
@@ -69,6 +97,8 @@ export class BankStatementsService {
       direction: txn.direction,
       balancePaise: txn.balancePaise,
       eventId: options.eventId ?? null,
+      workspaceId: account.workspaceId,
+      beneficiaryAccountId: account.id,
       rowHash: sha256(
         [
           txn.txnDate.toISOString().slice(0, 10),
@@ -92,6 +122,8 @@ export class BankStatementsService {
     const importRecord = await this.prisma.bankStatementImport.create({
       data: {
         eventId: options.eventId ?? null,
+        workspaceId: account.workspaceId,
+        beneficiaryAccountId: account.id,
         fileName: file.originalname,
         fileHash: options.force && previous ? fileHash + ':' + Date.now() : fileHash,
         totalRows: parsed.totalRows,
@@ -148,9 +180,16 @@ export class BankStatementsService {
     };
   }
 
-  async listImports(eventId?: string) {
+  /**
+   * Imports visible to the caller. The workspace filter is mandatory: with
+   * no filter this previously returned every customer's imports.
+   */
+  async listImports(params: { workspaceId: string; eventId?: string }) {
     return this.prisma.bankStatementImport.findMany({
-      where: eventId ? { eventId } : {},
+      where: {
+        workspaceId: params.workspaceId,
+        ...(params.eventId ? { eventId: params.eventId } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         uploadedByAdmin: { select: { id: true, name: true } },
@@ -160,6 +199,8 @@ export class BankStatementsService {
   }
 
   async listTransactions(params: {
+    /** Mandatory tenant filter; never derived from the query string. */
+    workspaceId: string;
     eventId?: string;
     importId?: string;
     direction?: 'CREDIT' | 'DEBIT';
@@ -172,6 +213,7 @@ export class BankStatementsService {
     const pageSize = Math.min(Number(params.pageSize ?? 50), 200);
 
     const where = {
+      workspaceId: params.workspaceId,
       eventId: params.eventId,
       importId: params.importId,
       direction: params.direction,

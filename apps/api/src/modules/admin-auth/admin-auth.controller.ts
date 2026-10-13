@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Ip, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { throttleConfig } from '../../common/throttle.config';
 import { AdminAuthService } from './admin-auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -11,7 +12,9 @@ export class AdminAuthController {
   constructor(private readonly auth: AdminAuthService) {}
 
   @Post('login')
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Throttle({
+    default: { limit: throttleConfig.loginLimit, ttl: throttleConfig.globalTtlMs },
+  })
   login(@Body() dto: LoginDto, @Ip() ip: string) {
     return this.auth.login(dto, ip);
   }

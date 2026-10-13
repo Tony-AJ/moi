@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { buildUpiLink, isValidVpa } from '../../common/utils/upi.util';
 import { paiseToRupeeString } from '../../common/utils/money.util';
 
@@ -25,18 +24,22 @@ export interface UpiHandoff {
 
 @Injectable()
 export class UpiService {
-  constructor(private readonly config: ConfigService) {}
-
+  /**
+   * There is deliberately no platform-wide default here.
+   *
+   * A fallback to a DEFAULT_UPI_ID environment variable used to apply when an
+   * event had no UPI id of its own, which meant a misconfigured customer
+   * event quietly collected its guests' money into the platform's own
+   * account. Each event must resolve to the beneficiary its own owner
+   * configured, or to nothing at all.
+   */
   resolvePayee(event: UpiPayeeConfig): { vpa: string; name: string } {
-    const vpa = event.upiId ?? this.config.get<string>('DEFAULT_UPI_ID') ?? '';
-    const name =
-      event.upiPayeeName ?? this.config.get<string>('DEFAULT_UPI_PAYEE_NAME') ?? 'Moi Ledger';
-    return { vpa, name };
+    return { vpa: event.upiId ?? '', name: event.upiPayeeName ?? '' };
   }
 
   isConfigured(event: UpiPayeeConfig): boolean {
-    const { vpa } = this.resolvePayee(event);
-    return Boolean(vpa) && isValidVpa(vpa);
+    const { vpa, name } = this.resolvePayee(event);
+    return Boolean(vpa) && Boolean(name) && isValidVpa(vpa);
   }
 
   buildHandoff(params: {

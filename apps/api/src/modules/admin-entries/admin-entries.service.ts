@@ -16,6 +16,10 @@ import {
 } from './dto/entry-actions.dto';
 import { buildEntryCode, generateAccessToken } from '../../common/utils/token.util';
 import { normalizePhone, normalizeReference } from '../../common/utils/normalize.util';
+import {
+  WorkspaceAccessService,
+  type WorkspaceScope,
+} from '../workspaces/workspace-access.service';
 
 @Injectable()
 export class AdminEntriesService {
@@ -23,12 +27,20 @@ export class AdminEntriesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly reconciliation: ReconciliationService,
+    private readonly access: WorkspaceAccessService,
   ) {}
 
-  buildWhere(query: QueryEntriesDto): Prisma.MoiEntryWhereInput {
-    const where: Prisma.MoiEntryWhereInput = {};
+  /**
+   * The scope argument is mandatory rather than optional on purpose: making
+   * it part of the signature means a new caller cannot forget it and quietly
+   * query across every customer. Callers obtain it from
+   * WorkspaceAccessService, never from the request body.
+   */
+  buildWhere(query: QueryEntriesDto, scope: WorkspaceScope): Prisma.MoiEntryWhereInput {
+    const where: Prisma.MoiEntryWhereInput = {
+      ...this.access.eventFilter(scope, query.eventId),
+    };
 
-    if (query.eventId) where.eventId = query.eventId;
     if (query.status?.length) where.paymentStatus = { in: query.status };
     if (query.paymentMethod) where.paymentMethod = query.paymentMethod;
 
@@ -69,10 +81,10 @@ export class AdminEntriesService {
     return where;
   }
 
-  async list(query: QueryEntriesDto) {
+  async list(query: QueryEntriesDto, scope: WorkspaceScope) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 25;
-    const where = this.buildWhere(query);
+    const where = this.buildWhere(query, scope);
 
     const [total, rows, aggregate] = await Promise.all([
       this.prisma.moiEntry.count({ where }),
@@ -106,8 +118,8 @@ export class AdminEntriesService {
     };
   }
 
-  async stats(eventId?: string) {
-    const where: Prisma.MoiEntryWhereInput = eventId ? { eventId } : {};
+  async stats(scope: WorkspaceScope, eventId?: string) {
+    const where: Prisma.MoiEntryWhereInput = this.access.eventFilter(scope, eventId);
 
     const [grouped, methodGrouped, totals, topEntries] = await Promise.all([
       this.prisma.moiEntry.groupBy({

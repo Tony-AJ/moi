@@ -1,10 +1,13 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
-import type { AdminRole } from '@prisma/client';
+import type { AdminRole, PlatformRole } from '@prisma/client';
 
 export interface AdminPrincipal {
   id: string;
   email: string;
+  /** Legacy flat role. Authorization comes from workspace membership. */
   role: AdminRole;
+  /** Platform-wide capability, not a licence to read customer data. */
+  platformRole: PlatformRole;
   name: string;
 }
 

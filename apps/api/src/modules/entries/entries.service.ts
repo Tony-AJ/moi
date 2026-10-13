@@ -37,10 +37,29 @@ export class EntriesService {
   ) {}
 
   async createEntry(slug: string, dto: CreateEntryDto, ip?: string) {
-    const event = await this.prisma.event.findUnique({ where: { slug } });
+    const event = await this.prisma.event.findUnique({
+      where: { slug },
+      include: { activePaymentConfig: true, workspace: { select: { status: true } } },
+    });
     if (!event) throw new NotFoundException('Event not found');
     if (!event.isOpen) {
       throw new ForbiddenException('This event is no longer accepting entries');
+    }
+    // A suspended customer stops collecting immediately.
+    if (event.workspace && event.workspace.status !== 'ACTIVE') {
+      throw new ForbiddenException('This event is no longer accepting entries');
+    }
+
+    const method = dto.paymentMethod ?? 'UPI';
+
+    // No beneficiary, no UPI handoff. Taking the entry anyway would show the
+    // guest a payment screen with no verified destination, and there used to
+    // be a platform-wide default that would have taken the money into the
+    // wrong account.
+    if (method === 'UPI' && !event.activePaymentConfig) {
+      throw new ForbiddenException(
+        'This event is not yet set up to receive online payments. Please contact the host.',
+      );
     }
 
     if (dto.amountPaise < event.minAmountPaise) {
@@ -68,7 +87,7 @@ export class EntriesService {
         },
       });
       if (existing) {
-        return this.toGuestView(existing, event, { deduplicated: true });
+        return this.toGuestView(existing, event, { deduplicated: true }, event.activePaymentConfig);
       }
     }
 
@@ -91,7 +110,10 @@ export class EntriesService {
           guestPhone: normalizePhone(dto.guestPhone),
           relation: dto.relation || null,
           amountPaise: dto.amountPaise,
-          paymentMethod: dto.paymentMethod ?? 'UPI',
+          paymentMethod: method,
+          // Pins the beneficiary that was live at this moment, so a later
+          // change of account cannot rewrite where this contribution went.
+          paymentConfigId: method === 'UPI' ? event.activePaymentConfig?.id ?? null : null,
           // Never trust the client for status. Everything starts unverified.
           paymentStatus: 'AWAITING_VERIFICATION',
           accessToken: generateAccessToken(),
@@ -106,6 +128,7 @@ export class EntriesService {
       entityType: 'MoiEntry',
       entityId: entry.id,
       ip,
+      workspaceId: event.workspaceId,
       metadata: {
         eventId: event.id,
         entryCode: entry.entryCode,
@@ -116,7 +139,7 @@ export class EntriesService {
 
     const possibleDuplicate = await this.findPossibleDuplicate(entry);
 
-    return this.toGuestView(entry, event, { possibleDuplicate });
+    return this.toGuestView(entry, event, { possibleDuplicate }, event.activePaymentConfig);
   }
 
   async getStatus(token: string) {
@@ -124,18 +147,27 @@ export class EntriesService {
       where: { accessToken: token },
       include: {
         event: true,
+        // The pinned snapshot, so the status page keeps showing the payee the
+        // guest was originally sent to even if the host has since switched
+        // the event to a different account.
+        paymentConfig: true,
         paymentClaims: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!entry) throw new NotFoundException('Entry not found');
 
-    return this.toGuestView(entry, entry.event, {
-      claims: entry.paymentClaims.map((claim) => ({
-        utr: claim.utr,
-        status: claim.status,
-        submittedAt: claim.createdAt,
-      })),
-    });
+    return this.toGuestView(
+      entry,
+      entry.event,
+      {
+        claims: entry.paymentClaims.map((claim) => ({
+          utr: claim.utr,
+          status: claim.status,
+          submittedAt: claim.createdAt,
+        })),
+      },
+      entry.paymentConfig,
+    );
   }
 
   async submitReference(token: string, dto: SubmitReferenceDto, ip?: string) {
@@ -159,6 +191,12 @@ export class EntriesService {
       return this.getStatus(token);
     }
 
+    // utrNormalized is unique across the whole platform, which is what stops
+    // the same transaction being claimed twice. A real UTR is globally unique
+    // too, so a collision across two workspaces means one of them mistyped
+    // it. The message below deliberately does not say which contribution
+    // holds the reference, so this cannot be used to probe another
+    // customer's records.
     const clash = await this.prisma.paymentClaim.findUnique({
       where: { utrNormalized: normalized },
       select: { entryId: true },
@@ -201,8 +239,11 @@ export class EntriesService {
 
     // Opportunistic match: if the statement containing this credit was already
     // imported, the entry can verify immediately. Otherwise it stays pending.
+    // canMarkNotFound is false so a guest who has just paid is never shown
+    // "not found in the statement" merely because nothing has been imported
+    // yet; only an operator's reconciliation run can reach that conclusion.
     try {
-      await this.reconciliation.matchEntry(entry.id);
+      await this.reconciliation.matchEntry(entry.id, { canMarkNotFound: false });
     } catch {
       // Matching is best-effort here; the admin can always re-run it.
     }
@@ -229,11 +270,19 @@ export class EntriesService {
     entry: MoiEntry,
     event: Prisma.EventGetPayload<{}>,
     extra: Record<string, unknown> = {},
+    paymentConfig?: { upiIdSnapshot: string; payeeNameSnapshot: string } | null,
   ) {
+    // Built from the snapshot pinned to this entry rather than from the
+    // event's current columns, so the guest is handed the same payee the
+    // entry will later be reconciled against.
+    const payee = paymentConfig
+      ? { upiId: paymentConfig.upiIdSnapshot, upiPayeeName: paymentConfig.payeeNameSnapshot }
+      : null;
+
     const upi =
-      entry.paymentMethod === 'UPI' && this.upi.isConfigured(event)
+      entry.paymentMethod === 'UPI' && payee && this.upi.isConfigured(payee)
         ? this.upi.buildHandoff({
-            event,
+            event: { ...payee, name: event.name },
             amountPaise: entry.amountPaise,
             entryCode: entry.entryCode,
           })
