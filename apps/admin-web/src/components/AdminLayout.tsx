@@ -6,12 +6,21 @@ const NAV = [
   { to: '/', label: 'Dashboard' },
   { to: '/entries', label: 'Moi entries' },
   { to: '/reconcile', label: 'Reconciliation' },
-  { to: '/events', label: 'Events & QR' },
+  { to: '/events', label: 'Event & QR' },
   { to: '/reports', label: 'Reports' },
+  { to: '/activity', label: 'Activity' },
+  { to: '/change-password', label: 'Change password' },
 ];
+
+const ROLE_LABEL: Record<string, string> = {
+  WORKSPACE_OWNER: 'Organizer',
+  WORKSPACE_ADMIN: 'Co-organizer',
+  EVENT_STAFF: 'Event staff',
+};
 
 export function AdminLayout() {
   const { admin, signOut } = useAuth();
+  const membership = admin?.memberships[0];
 
   return (
     <EventScopeProvider>
@@ -20,7 +29,11 @@ export function AdminLayout() {
           <div>
             <div className="brand">MoiLedger</div>
             <div className="who">
-              {admin?.name} &middot; {admin?.role}
+              {admin?.name}
+              {membership
+                ? ' · ' + (ROLE_LABEL[membership.role] ?? membership.role)
+                : ''}
+              {membership ? <div>{membership.workspaceName}</div> : null}
             </div>
           </div>
           <nav>

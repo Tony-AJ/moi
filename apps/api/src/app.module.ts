@@ -18,6 +18,8 @@ import { ReconciliationModule } from './modules/reconciliation/reconciliation.mo
 import { ReportsModule } from './modules/reports/reports.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { BeneficiariesModule } from './modules/beneficiaries/beneficiaries.module';
+import { PlatformModule } from './modules/platform/platform.module';
+import { ActivityModule } from './modules/activity/activity.module';
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { BeneficiariesModule } from './modules/beneficiaries/beneficiaries.modul
     BankStatementsModule,
     BeneficiariesModule,
     ReportsModule,
+    PlatformModule,
+    ActivityModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

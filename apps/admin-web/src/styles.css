@@ -512,3 +512,57 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Organizer logins & platform console -------------------------------- */
+
+h3 {
+  font-size: 0.9rem;
+  margin: 18px 0 8px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.inline-form {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: #fafbfd;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--brand);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.credentials {
+  border: 2px solid var(--warn);
+}
+
+.credentials .secret {
+  display: inline-block;
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background: var(--warn-bg);
+  border: 1px solid #eedfb4;
+  border-radius: 6px;
+  padding: 4px 10px;
+  user-select: all;
+}
+
+.credentials textarea {
+  font-size: 0.82rem;
+  resize: vertical;
+}
+
+.sidebar .who div {
+  opacity: 0.85;
+  margin-top: 2px;
+}

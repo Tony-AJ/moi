@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import {
   api,
+  canManageWorkspace,
   formatDate,
   formatInr,
   type BeneficiaryAccount,
@@ -340,10 +341,188 @@ function BeneficiaryPanel({
   );
 }
 
+const toRupees = (paise: number) => String(paise / 100);
+const toPaise = (rupees: string) => Math.round(Number(rupees.replace(/[^\d.]/g, '') || '0') * 100);
+
+/**
+ * The organizer's own event details. The super admin only sets a name and a
+ * date when creating the event; everything the guest sees is filled in here.
+ */
+function EventDetailsForm({
+  event,
+  onSaved,
+  onCancel,
+}: {
+  event: EventSummary;
+  onSaved: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(event.name);
+  const [hostName, setHostName] = useState(event.hostName ?? '');
+  const [eventDate, setEventDate] = useState(event.eventDate.slice(0, 10));
+  const [venue, setVenue] = useState(event.venue ?? '');
+  const [suggested, setSuggested] = useState(event.suggestedAmounts.map(toRupees).join(', '));
+  const [minRupees, setMinRupees] = useState(toRupees(event.minAmountPaise));
+  const [maxRupees, setMaxRupees] = useState(toRupees(event.maxAmountPaise));
+  const [collectPhone, setCollectPhone] = useState(event.collectPhone);
+  const [requirePhone, setRequirePhone] = useState(event.requirePhone);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save(formEvent: React.FormEvent) {
+    formEvent.preventDefault();
+    setError(null);
+
+    const suggestedAmounts = suggested
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map(toPaise);
+    if (suggestedAmounts.some((paise) => !paise || paise < 100)) {
+      setError('Quick-pick amounts must be rupee values of at least 1 each.');
+      return;
+    }
+    if (suggestedAmounts.length > 8) {
+      setError('Use at most 8 quick-pick amounts.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await api.updateEvent(event.id, {
+        name: name.trim(),
+        hostName: hostName.trim(),
+        eventDate: new Date(eventDate + 'T10:00:00').toISOString(),
+        venue: venue.trim(),
+        suggestedAmounts,
+        minAmountPaise: toPaise(minRupees),
+        maxAmountPaise: toPaise(maxRupees),
+        collectPhone: collectPhone || requirePhone,
+        requirePhone,
+      });
+      await onSaved();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save the event');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="inline-form" onSubmit={save}>
+      <h3>Event details</h3>
+      {error ? <div className="alert err">{error}</div> : null}
+      <div className="toolbar">
+        <div className="grow">
+          <label htmlFor={'d-name-' + event.id}>Event name (shown to guests)</label>
+          <input
+            id={'d-name-' + event.id}
+            value={name}
+            onChange={(domEvent) => setName(domEvent.target.value)}
+            required
+            minLength={3}
+          />
+        </div>
+        <div className="grow">
+          <label htmlFor={'d-host-' + event.id}>Host family</label>
+          <input
+            id={'d-host-' + event.id}
+            value={hostName}
+            onChange={(domEvent) => setHostName(domEvent.target.value)}
+          />
+        </div>
+      </div>
+      <div className="toolbar">
+        <div>
+          <label htmlFor={'d-date-' + event.id}>Date</label>
+          <input
+            id={'d-date-' + event.id}
+            type="date"
+            value={eventDate}
+            onChange={(domEvent) => setEventDate(domEvent.target.value)}
+            required
+          />
+        </div>
+        <div className="grow">
+          <label htmlFor={'d-venue-' + event.id}>Venue</label>
+          <input
+            id={'d-venue-' + event.id}
+            value={venue}
+            onChange={(domEvent) => setVenue(domEvent.target.value)}
+          />
+        </div>
+      </div>
+      <div className="toolbar">
+        <div className="grow">
+          <label htmlFor={'d-suggested-' + event.id}>
+            Quick-pick amounts in &#8377; (comma separated)
+          </label>
+          <input
+            id={'d-suggested-' + event.id}
+            value={suggested}
+            onChange={(domEvent) => setSuggested(domEvent.target.value)}
+            placeholder="101, 501, 1001, 2001"
+          />
+        </div>
+        <div style={{ width: 120 }}>
+          <label htmlFor={'d-min-' + event.id}>Min &#8377;</label>
+          <input
+            id={'d-min-' + event.id}
+            value={minRupees}
+            inputMode="decimal"
+            onChange={(domEvent) => setMinRupees(domEvent.target.value)}
+          />
+        </div>
+        <div style={{ width: 120 }}>
+          <label htmlFor={'d-max-' + event.id}>Max &#8377;</label>
+          <input
+            id={'d-max-' + event.id}
+            value={maxRupees}
+            inputMode="decimal"
+            onChange={(domEvent) => setMaxRupees(domEvent.target.value)}
+          />
+        </div>
+      </div>
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
+            checked={collectPhone || requirePhone}
+            onChange={(domEvent) => setCollectPhone(domEvent.target.checked)}
+            disabled={requirePhone}
+            style={{ width: 'auto', marginRight: 8 }}
+          />
+          Ask guests for a phone number
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={requirePhone}
+            onChange={(domEvent) => setRequirePhone(domEvent.target.checked)}
+            style={{ width: 'auto', marginRight: 8 }}
+          />
+          Make the phone number mandatory
+        </label>
+      </div>
+      <div className="row-actions">
+        <button className="btn" type="submit" disabled={busy}>
+          {busy ? 'Saving...' : 'Save details'}
+        </button>
+        <button className="btn secondary" type="button" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function EventsPage() {
   const { events, reload, loading, error } = useEventScope();
   const { admin } = useAuth();
-  const isOwner = admin?.role === 'OWNER';
+  // Workspace role, not the legacy flat role: an organizer provisioned by the
+  // platform is the owner of their own workspace and nothing else.
+  const isOwner = canManageWorkspace(admin);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -353,8 +532,6 @@ export function EventsPage() {
   const [hostName, setHostName] = useState('');
   const [eventDate, setEventDate] = useState('');
   const [venue, setVenue] = useState('');
-  const [upiId, setUpiId] = useState('');
-  const [upiPayeeName, setUpiPayeeName] = useState('');
   const [collectPhone, setCollectPhone] = useState(true);
 
   async function createEvent(formEvent: React.FormEvent) {
@@ -372,8 +549,6 @@ export function EventsPage() {
         hostName: hostName.trim() || undefined,
         eventDate: new Date(eventDate).toISOString(),
         venue: venue.trim() || undefined,
-        upiId: upiId.trim() || undefined,
-        upiPayeeName: upiPayeeName.trim() || undefined,
         collectPhone,
       });
       setShowForm(false);
@@ -381,8 +556,6 @@ export function EventsPage() {
       setHostName('');
       setEventDate('');
       setVenue('');
-      setUpiId('');
-      setUpiPayeeName('');
       await reload();
     } catch (createError) {
       setFormError(createError instanceof Error ? createError.message : 'Could not create event');
@@ -463,25 +636,10 @@ export function EventsPage() {
                   />
                 </div>
               </div>
-              <div className="toolbar">
-                <div className="grow">
-                  <label htmlFor="e-upi">UPI ID (leave blank to use the server default)</label>
-                  <input
-                    id="e-upi"
-                    value={upiId}
-                    onChange={(domEvent) => setUpiId(domEvent.target.value)}
-                    placeholder="yourname@okicici"
-                  />
-                </div>
-                <div className="grow">
-                  <label htmlFor="e-payee">UPI payee name</label>
-                  <input
-                    id="e-payee"
-                    value={upiPayeeName}
-                    onChange={(domEvent) => setUpiPayeeName(domEvent.target.value)}
-                  />
-                </div>
-              </div>
+              <p className="muted">
+                Guests pay the UPI account you set under Payment accounts above. Until an account
+                is confirmed and selected, the event can record cash but not UPI payments.
+              </p>
               <div className="field">
                 <label>
                   <input
@@ -524,16 +682,37 @@ export function EventsPage() {
               </p>
             </div>
             {isOwner ? (
-              <button
-                className="btn secondary small"
-                type="button"
-                disabled={busy}
-                onClick={() => toggleOpen(event)}
-              >
-                {event.isOpen ? 'Close entries' : 'Reopen entries'}
-              </button>
+              <div className="row-actions">
+                <button
+                  className="btn secondary small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setEditingId(editingId === event.id ? null : event.id)}
+                >
+                  {editingId === event.id ? 'Close editor' : 'Edit details'}
+                </button>
+                <button
+                  className="btn secondary small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => toggleOpen(event)}
+                >
+                  {event.isOpen ? 'Close entries' : 'Reopen entries'}
+                </button>
+              </div>
             ) : null}
           </div>
+
+          {editingId === event.id ? (
+            <EventDetailsForm
+              event={event}
+              onCancel={() => setEditingId(null)}
+              onSaved={async () => {
+                setEditingId(null);
+                await reload();
+              }}
+            />
+          ) : null}
 
           {event.totals ? (
             <div className="cards">

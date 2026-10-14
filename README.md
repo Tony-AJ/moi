@@ -23,18 +23,19 @@ Guests scan an event QR code, fill in their contribution details, and initiate a
    - [Quick Start (All Services Together)](#quick-start-all-services-together)
    - [Running Services Individually](#running-services-individually)
    - [Database Management Commands](#database-management-commands)
-6. [End-to-End Workflow](#end-to-end-workflow)
+6. [Roles: Super Admin and Event Organizers](#roles-super-admin-and-event-organizers)
+7. [End-to-End Workflow](#end-to-end-workflow)
    - [Phase 1: Event Setup & QR Deployment](#phase-1-event-setup--qr-deployment)
    - [Phase 2: Guest Experience & UPI Payment](#phase-2-guest-experience--upi-payment)
    - [Phase 3: Statement Import & Automated Reconciliation](#phase-3-statement-import--automated-reconciliation)
    - [Phase 4: Ambiguity Resolution & Cash Attestation](#phase-4-ambiguity-resolution--cash-attestation)
    - [Phase 5: Auditing, Export & Closure](#phase-5-auditing-export--closure)
-7. [Payment Lifecycle & State Machine](#payment-lifecycle--state-machine)
-8. [Reconciliation & Statement Matching Engine](#reconciliation--statement-matching-engine)
-9. [Environment Configuration Reference](#environment-configuration-reference)
-10. [API Reference Summary](#api-reference-summary)
-11. [Security, Integrity & Fraud Prevention](#security-integrity--fraud-prevention)
-12. [Verification & Testing Checklist](#verification--testing-checklist)
+8. [Payment Lifecycle & State Machine](#payment-lifecycle--state-machine)
+9. [Reconciliation & Statement Matching Engine](#reconciliation--statement-matching-engine)
+10. [Environment Configuration Reference](#environment-configuration-reference)
+11. [API Reference Summary](#api-reference-summary)
+12. [Security, Integrity & Fraud Prevention](#security-integrity--fraud-prevention)
+13. [Verification & Testing Checklist](#verification--testing-checklist)
 
 ---
 
@@ -265,9 +266,10 @@ Once running:
 - **API Health Check**: <http://localhost:4000/api/health>
 - **Guest Web Portal**: <http://localhost:5173/e/kumar-wedding-2026>
 - **Admin Dashboard**: <http://localhost:5174>
-- **Default Seeded Login**:
-  - **Email**: `admin@moiledger.local`
-  - **Password**: `ChangeMe#123`
+- **Default Seeded Logins** (password `ChangeMe#123` for all; change them):
+  - **Super admin** (platform console, `/platform`): `super@moiledger.local`
+  - **Organizer, Kumar family event**: `admin@moiledger.local`
+  - **Organizer, Raman family event**: `priya@moiledger.local`
 
 ---
 
@@ -304,6 +306,44 @@ The root `package.json` provides handy shortcuts for all database and Prisma ope
 
 ---
 
+## Roles: Super Admin and Event Organizers
+
+MoiLedger is run by one platform operator for many families. Each event's
+organizer gets their own login and sees only their own event.
+
+```
+                         Super admin
+          creates the event + issues the organizer login
+                               |
+            +------------------+------------------+
+            |                                     |
+   Event A organizer                     Event B organizer
+   own workspace, own login              own workspace, own login
+   fills in event details                fills in event details
+   adds their own UPI account            adds their own UPI account
+   register, reports, activity           register, reports, activity
+            |                                     |
+            +----- cannot see each other ---------+
+```
+
+| Who | Can | Cannot |
+| --- | --- | --- |
+| **Super admin** (`PlatformRole SUPER_ADMIN`) | Create an event with its organizer login; add more events for an existing organizer; reset an organizer's password; disable/enable a login; suspend/restore a workspace; see counts and setup status per event | See guest names, amounts, totals or reports; choose an organizer's UPI account; manage other super admins |
+| **Organizer** (`WORKSPACE_OWNER`) | Edit their event details; add and confirm their UPI account; record and verify entries; import statements; export reports; read their activity feed | See or touch any other organizer's event |
+| **Event staff** (`EVENT_STAFF`) | Whatever their per-event grants allow, on assigned events only | Anything outside their assigned events, including workspace-level activity |
+
+**How a login is handed over**
+
+1. Super admin opens **Organizers & events** (`/platform`) and fills in the event name, date and the organizer's name and email.
+2. The system creates a separate workspace, the event, and the organizer login in one step, and shows a **one-time password** once, with a ready-to-send message.
+3. The organizer signs in with it and must choose their own password before anything else opens. The API enforces this, not only the UI, so a password sent over WhatsApp works exactly once.
+4. Forgot it? Super admin clicks **Reset password**: the old password stops working immediately and a new one-time password is shown.
+
+Each organizer is a separate workspace, so isolation rests on the same
+tenant boundary the cross-tenant test suite already exercises.
+
+---
+
 ## End-to-End Workflow
 
 Here is how the complete system functions from before the event until after the celebration:
@@ -335,11 +375,13 @@ Here is how the complete system functions from before the event until after the 
 ```
 
 ### Phase 1: Event Setup & QR Deployment
-1. Organizer logs in to the Admin Portal (`:5174`) with their credentials.
-2. Under **Events & QR**, they create an event (e.g., "Kumar & Priya Wedding Reception").
-3. They configure the beneficiary UPI ID (e.g., `family@okicici`), host name, venue, suggested amounts (₹500, ₹1000, ₹2000, ₹5000), and phone requirements.
-4. The system produces a print-ready QR code that points to the public guest URL (`https://your-domain.com/e/kumar-wedding-2026`).
-5. The QR standee is printed and placed at the entrance or dining hall gift desk.
+1. The super admin creates the event and the organizer's login under **Organizers & events**, and sends the organizer the one-time password.
+2. The organizer signs in to the Admin Portal (`:5174`) and sets their own password.
+3. Under **Event & QR → Edit details** they fill in the host name, venue, date, quick-pick amounts and phone requirements.
+4. Under **Payment accounts** they add their UPI ID (e.g., `family@okicici`), confirm it, and set it as the event's payee. Until then the event can record cash but not UPI payments.
+5. The system produces a print-ready QR code that points to the public guest URL (`https://your-domain.com/e/kumar-wedding-2026`).
+6. The QR standee is printed and placed at the entrance or dining hall gift desk.
+7. Under **Activity**, the organizer can follow everything that happens on the event: registrations, references, verifications, imports, exports and changes.
 
 ### Phase 2: Guest Experience & UPI Payment
 1. The guest scans the QR code on their smartphone; the Guest Web App (`:5173`) opens immediately.
@@ -502,6 +544,17 @@ All API endpoints are prefixed with `/api`. For exhaustive payloads, see [`docs/
 - `POST /api/admin/auth/login` — Sign in with email and password to obtain a Bearer JWT.
 - `GET /api/admin/auth/me` — Retrieve the authenticated administrator's profile and permissions.
 - `POST /api/admin/auth/change-password` — Update admin account password.
+
+### Super Admin (platform) — `SUPER_ADMIN` only, no guest data
+- `GET /api/admin/platform/overview` — Organizers, their logins and events, with counts and setup status only.
+- `POST /api/admin/platform/organizers` — Create workspace + event + organizer login; returns a one-time password once.
+- `POST /api/admin/platform/workspaces/:workspaceId/events` — Add another event to an existing organizer.
+- `PATCH /api/admin/platform/workspaces/:workspaceId` — Suspend (with reason) or restore a workspace.
+- `POST /api/admin/platform/users/:userId/reset-password` — Issue a new one-time password.
+- `PATCH /api/admin/platform/users/:userId` — Disable or enable a login.
+
+### Admin Activity
+- `GET /api/admin/activity?eventId=&before=&limit=` — The organizer's audit trail, scoped to the events they may see.
 
 ### Admin Event Management
 - `GET /api/admin/events` — List all events with aggregate totals and QR metadata.

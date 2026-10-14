@@ -8,6 +8,8 @@ export interface AdminPrincipal {
   role: AdminRole;
   /** Platform-wide capability, not a licence to read customer data. */
   platformRole: PlatformRole;
+  /** True while the user still holds a password somebody else issued. */
+  mustChangePassword: boolean;
   name: string;
 }
 

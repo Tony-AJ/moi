@@ -25,6 +25,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
       status = exception.getStatus();
       const body = exception.getResponse();
       message = typeof body === 'string' ? body : (body as any).message ?? body;
+      // A thrower may attach a stable code for clients to branch on, such as
+      // PASSWORD_CHANGE_REQUIRED; messages are for people and may change.
+      if (typeof body === 'object' && typeof (body as any).code === 'string') {
+        code = (body as any).code;
+      }
     } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       code = exception.code;
       if (exception.code === 'P2002') {

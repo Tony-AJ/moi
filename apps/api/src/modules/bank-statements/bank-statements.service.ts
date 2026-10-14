@@ -149,6 +149,8 @@ export class BankStatementsService {
       action: 'BANK_STATEMENT_IMPORTED',
       entityType: 'BankStatementImport',
       entityId: importRecord.id,
+      workspaceId: account.workspaceId,
+      eventId: options.eventId ?? null,
       ip,
       metadata: {
         fileName: file.originalname,

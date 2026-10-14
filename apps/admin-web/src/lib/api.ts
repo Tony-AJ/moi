@@ -10,11 +10,103 @@ export type PaymentStatus =
 
 export type PaymentMethod = 'UPI' | 'CASH' | 'BANK_TRANSFER' | 'OTHER';
 
+export type WorkspaceRole = 'WORKSPACE_OWNER' | 'WORKSPACE_ADMIN' | 'EVENT_STAFF';
+
+export interface Membership {
+  workspaceId: string;
+  workspaceName: string;
+  workspaceSlug: string;
+  workspaceStatus: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  role: WorkspaceRole;
+}
+
 export interface AdminProfile {
   id: string;
   email: string;
   name: string;
+  /** Legacy flat role; authorization comes from memberships. */
   role: 'OWNER' | 'STAFF';
+  platformRole: 'USER' | 'SUPER_ADMIN';
+  /** True while the user still holds a password somebody else issued. */
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+  memberships: Membership[];
+}
+
+export const isSuperAdmin = (profile: AdminProfile | null): boolean =>
+  profile?.platformRole === 'SUPER_ADMIN';
+
+/** Role in the workspace the admin app is operating in (the first one). */
+export const workspaceRole = (profile: AdminProfile | null): WorkspaceRole | null =>
+  profile?.memberships[0]?.role ?? null;
+
+export const canManageWorkspace = (profile: AdminProfile | null): boolean => {
+  const role = workspaceRole(profile);
+  return role === 'WORKSPACE_OWNER' || role === 'WORKSPACE_ADMIN';
+};
+
+export interface PlatformMember {
+  id: string;
+  name: string;
+  email: string;
+  role: WorkspaceRole;
+  isActive: boolean;
+  platformRole: 'USER' | 'SUPER_ADMIN';
+  mustChangePassword: boolean;
+  lastLoginAt: string | null;
+}
+
+export interface PlatformEvent {
+  id: string;
+  name: string;
+  slug: string;
+  eventDate: string;
+  venue: string | null;
+  isOpen: boolean;
+  guestUrl: string;
+  paymentReady: boolean;
+  entryCount: number;
+  lastActivityAt: string | null;
+  createdAt: string;
+}
+
+export interface PlatformWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  contactEmail: string | null;
+  contactPhone: string | null;
+  suspendedAt: string | null;
+  suspendedReason: string | null;
+  createdAt: string;
+  members: PlatformMember[];
+  events: PlatformEvent[];
+}
+
+export interface ProvisionResult {
+  workspace: { id: string; name: string; slug: string };
+  event: { id: string; name: string; slug: string; eventDate: string; guestUrl: string };
+  organizer: { id: string; name: string; email: string };
+  temporaryPassword: string;
+}
+
+export interface ActivityRow {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  eventId: string | null;
+  eventName: string | null;
+  actor: { kind: 'TEAM' | 'PLATFORM' | 'GUEST' | 'SYSTEM'; name: string | null };
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ActivityPage {
+  rows: ActivityRow[];
+  hasMore: boolean;
+  nextBefore: string | null;
 }
 
 export interface EventSummary {
@@ -243,6 +335,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const parsed = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
+    // The API holds an issued password at the change form; send the user
+    // there rather than showing a bare "forbidden" on whatever page they hit.
+    if (
+      response.status === 403 &&
+      parsed?.error === 'PASSWORD_CHANGE_REQUIRED' &&
+      !location.pathname.startsWith('/change-password')
+    ) {
+      location.assign('/change-password');
+    }
     const message = Array.isArray(parsed?.message)
       ? parsed.message.join('. ')
       : parsed?.message?.message ?? parsed?.message ?? 'Request failed';
@@ -276,10 +377,56 @@ export const api = {
   me: () => request<AdminProfile>('/admin/auth/me'),
 
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<{ ok: boolean }>('/admin/auth/change-password', {
+    request<{ ok: boolean; profile: AdminProfile }>('/admin/auth/change-password', {
       method: 'POST',
       body: { currentPassword, newPassword },
     }),
+
+  activity: (params: { eventId?: string; before?: string; limit?: number }) =>
+    request<ActivityPage>('/admin/activity' + query(params)),
+
+  platform: {
+    overview: () => request<PlatformWorkspace[]>('/admin/platform/overview'),
+
+    provisionOrganizer: (payload: {
+      organizerName: string;
+      organizerEmail: string;
+      organizerPhone?: string;
+      workspaceName?: string;
+      eventName: string;
+      eventDate: string;
+      hostName?: string;
+      venue?: string;
+    }) =>
+      request<ProvisionResult>('/admin/platform/organizers', { method: 'POST', body: payload }),
+
+    addEvent: (
+      workspaceId: string,
+      payload: { eventName: string; eventDate: string; hostName?: string; venue?: string },
+    ) =>
+      request<PlatformEvent>('/admin/platform/workspaces/' + workspaceId + '/events', {
+        method: 'POST',
+        body: payload,
+      }),
+
+    resetPassword: (userId: string) =>
+      request<{ user: { id: string; name: string; email: string }; temporaryPassword: string }>(
+        '/admin/platform/users/' + userId + '/reset-password',
+        { method: 'POST' },
+      ),
+
+    setUserActive: (userId: string, isActive: boolean) =>
+      request<{ id: string; isActive: boolean }>('/admin/platform/users/' + userId, {
+        method: 'PATCH',
+        body: { isActive },
+      }),
+
+    setWorkspaceStatus: (workspaceId: string, status: 'ACTIVE' | 'SUSPENDED', reason?: string) =>
+      request<{ id: string; status: string }>('/admin/platform/workspaces/' + workspaceId, {
+        method: 'PATCH',
+        body: { status, reason },
+      }),
+  },
 
   events: () => request<EventSummary[]>('/admin/events'),
 

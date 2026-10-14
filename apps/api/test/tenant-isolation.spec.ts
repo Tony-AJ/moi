@@ -37,6 +37,7 @@ function principal(id: string, overrides: Partial<AdminPrincipal> = {}): AdminPr
     name: id,
     role: 'OWNER',
     platformRole: 'USER',
+    mustChangePassword: false,
     ...overrides,
   };
 }

@@ -52,18 +52,51 @@ export class AdminAuthService {
       role: admin.role,
     });
 
-    return {
-      accessToken,
-      admin: { id: admin.id, email: admin.email, name: admin.name, role: admin.role },
-    };
+    return { accessToken, admin: await this.profile(admin.id) };
   }
 
   async me(adminId: string) {
+    return this.profile(adminId);
+  }
+
+  /**
+   * What the admin app needs to decide where a user lands: the platform
+   * console, their own workspace, or the forced password change. Only active
+   * memberships are listed; a revoked one grants nothing and is not shown.
+   */
+  private async profile(adminId: string) {
     const admin = await this.prisma.adminUser.findUniqueOrThrow({
       where: { id: adminId },
-      select: { id: true, email: true, name: true, role: true, lastLoginAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        platformRole: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        memberships: {
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            role: true,
+            workspace: { select: { id: true, name: true, slug: true, status: true } },
+          },
+        },
+      },
     });
-    return admin;
+
+    const { memberships, ...rest } = admin;
+    return {
+      ...rest,
+      memberships: memberships.map((membership) => ({
+        workspaceId: membership.workspace.id,
+        workspaceName: membership.workspace.name,
+        workspaceSlug: membership.workspace.slug,
+        workspaceStatus: membership.workspace.status,
+        role: membership.role,
+      })),
+    };
   }
 
   async changePassword(adminId: string, dto: ChangePasswordDto, ip?: string) {
@@ -76,7 +109,8 @@ export class AdminAuthService {
 
     await this.prisma.adminUser.update({
       where: { id: adminId },
-      data: { passwordHash: await bcrypt.hash(dto.newPassword, 12) },
+      // Choosing their own password is what retires an issued one.
+      data: { passwordHash: await bcrypt.hash(dto.newPassword, 12), mustChangePassword: false },
     });
 
     await this.audit.record({
@@ -85,8 +119,9 @@ export class AdminAuthService {
       entityType: 'AdminUser',
       entityId: adminId,
       ip,
+      metadata: { replacedIssuedPassword: admin.mustChangePassword },
     });
 
-    return { ok: true };
+    return { ok: true, profile: await this.profile(adminId) };
   }
 }

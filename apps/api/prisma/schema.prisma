@@ -320,6 +320,7 @@ model Event {
   entries             MoiEntry[]
   statementImports    BankStatementImport[]
   bankTransactions    BankTransaction[]
+  auditLogs           AuditLog[]
 
   @@index([workspaceId])
   @@map("events")
@@ -329,17 +330,22 @@ model Event {
 /// memberships and event assignments, never from this row alone - the one
 /// exception being platformRole, which is scoped to platform operations.
 model AdminUser {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  name         String
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  passwordHash       String
+  name               String
   /// DEPRECATED: flat role from the single-tenant version. Dropped in step C.
-  role         AdminRole    @default(STAFF)
-  platformRole PlatformRole @default(USER)
-  isActive     Boolean      @default(true)
-  lastLoginAt  DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  role               AdminRole    @default(STAFF)
+  platformRole       PlatformRole @default(USER)
+  isActive           Boolean      @default(true)
+  /// Set when the password was issued by someone else (a super admin
+  /// provisioning or resetting an organizer login). Until the user picks
+  /// their own, every admin route except /me and change-password is refused,
+  /// so a password that travelled over WhatsApp or SMS is single-use.
+  mustChangePassword Boolean      @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
   auditLogs        AuditLog[]
   recordedEntries  MoiEntry[]            @relation("recordedBy")
@@ -523,10 +529,10 @@ model BankTransaction {
   matchedEntry       MoiEntry?           @relation(fields: [matchedEntryId], references: [id])
   paymentClaim       PaymentClaim?
 
+  @@unique([beneficiaryAccountId, rowHash])
   @@index([refNormalized])
   @@index([amountPaise, direction])
   @@index([txnDate])
-  @@unique([beneficiaryAccountId, rowHash])
   @@index([beneficiaryAccountId, direction, matchedEntryId])
   @@index([workspaceId])
   @@map("bank_transactions")
@@ -538,6 +544,10 @@ model AuditLog {
   /// Workspace the action touched. Null for platform-level actions such as
   /// login or workspace provisioning.
   workspaceId     String?
+  /// Event the action concerned, when there is one. Lets an activity feed be
+  /// scoped to the events a caller may see; null for workspace-level actions
+  /// such as adding a payment account, which only owners and admins see.
+  eventId         String?
   action          String
   entityType      String
   entityId        String?
@@ -550,8 +560,10 @@ model AuditLog {
 
   adminUser AdminUser? @relation(fields: [adminUserId], references: [id])
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  event     Event?     @relation(fields: [eventId], references: [id], onDelete: SetNull)
 
   @@index([entityType, entityId])
+  @@index([workspaceId, eventId, createdAt])
   @@index([createdAt])
   @@index([workspaceId, createdAt])
   @@index([isSupportAccess, createdAt])

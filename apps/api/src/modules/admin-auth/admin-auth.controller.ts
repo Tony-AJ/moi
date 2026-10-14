@@ -6,6 +6,7 @@ import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
+import { AllowPendingPassword } from '../../common/decorators/allow-pending-password.decorator';
 
 @Controller('admin/auth')
 export class AdminAuthController {
@@ -21,12 +22,14 @@ export class AdminAuthController {
 
   @Get('me')
   @UseGuards(AdminAuthGuard)
+  @AllowPendingPassword()
   me(@CurrentAdmin() admin: AdminPrincipal) {
     return this.auth.me(admin.id);
   }
 
   @Post('change-password')
   @UseGuards(AdminAuthGuard)
+  @AllowPendingPassword()
   changePassword(
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() dto: ChangePasswordDto,

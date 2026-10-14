@@ -162,7 +162,7 @@ export class AdminEventsService {
     return base + '/e/' + slug;
   }
 
-  private async uniqueSlug(name: string): Promise<string> {
+  async uniqueSlug(name: string): Promise<string> {
     const base = slugify(name) || 'event';
     let candidate = base;
     let suffix = 1;

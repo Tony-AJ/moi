@@ -105,8 +105,112 @@ Unknown email and wrong password return the same `401`.
 Current admin profile. The admin row is re-read on every request, so
 deactivating an account revokes access immediately.
 
+### First sign-in with an issued password
+
+A login created or reset by a super admin has `mustChangePassword: true`.
+Until the user changes it, every admin route except `GET /admin/auth/me` and
+`POST /admin/auth/change-password` answers:
+
+```json
+{ "statusCode": 403, "error": "PASSWORD_CHANGE_REQUIRED", "message": "Choose a new password before continuing" }
+```
+
+`login` and `me` return `platformRole`, `mustChangePassword` and the active
+`memberships` (`workspaceId`, `workspaceName`, `workspaceStatus`, `role`) so
+the client can route to the platform console, the organizer workspace, or the
+change form.
+
 ### `POST /admin/auth/change-password`
 `{ "currentPassword": "...", "newPassword": "..." }` (min 10 chars).
+
+---
+
+## Platform (super admin)
+
+Every route requires `platformRole = SUPER_ADMIN` (`403 Platform administrators
+only` otherwise). None of them return guest names, amounts or totals; a
+platform role still grants no read of a workspace's register.
+
+### `GET /admin/platform/overview`
+Each workspace with its active logins and its events:
+
+```json
+[{
+  "id": "...", "name": "Kumar Family", "status": "ACTIVE",
+  "members": [{ "id": "...", "name": "Kumar Organizer", "email": "...", "role": "WORKSPACE_OWNER",
+                "isActive": true, "mustChangePassword": false, "lastLoginAt": "..." }],
+  "events": [{ "id": "...", "name": "...", "eventDate": "...", "isOpen": true,
+               "paymentReady": false, "entryCount": 12, "lastActivityAt": "...", "guestUrl": "..." }]
+}]
+```
+
+`paymentReady` is false until the organizer has added, confirmed and selected
+their own UPI account.
+
+### `POST /admin/platform/organizers`
+Creates the workspace, the event and the organizer login in one transaction.
+
+```json
+{
+  "organizerName": "Kumar Organizer",
+  "organizerEmail": "kumar@example.com",
+  "organizerPhone": "98765 43210",
+  "eventName": "Kumar & Priya Wedding Reception",
+  "eventDate": "2026-12-05T10:00:00.000Z",
+  "hostName": "Kumar Family",
+  "venue": "Sri Krishna Mahal"
+}
+```
+
+Returns `workspace`, `event` (with `guestUrl`), `organizer` and
+`temporaryPassword` (e.g. `Kq7M-x3Pa-9WtZ`). The password is returned only
+here, stored only as a bcrypt hash, and never written to the audit log.
+`409` when the email already has a login — add an event to that organizer's
+workspace instead.
+
+### `POST /admin/platform/workspaces/:workspaceId/events`
+`{ "eventName", "eventDate", "hostName?", "venue?" }` — another event for an
+existing organizer, visible to them immediately with their existing login.
+
+### `PATCH /admin/platform/workspaces/:workspaceId`
+`{ "status": "SUSPENDED", "reason": "..." }` or `{ "status": "ACTIVE" }`.
+Suspending closes the guest form on every event in the workspace and refuses
+its members' admin requests. Nothing is deleted. `reason` is required to
+suspend.
+
+### `POST /admin/platform/users/:userId/reset-password`
+Returns `{ user, temporaryPassword }`. The previous password stops working at
+once, and sessions already open are held at the change-password form.
+`400` for your own account, `403` for another super admin.
+
+### `PATCH /admin/platform/users/:userId`
+`{ "isActive": false }` disables the login; the next request with any of its
+tokens gets `401`. Same restrictions as reset.
+
+---
+
+## Admin: activity
+
+### `GET /admin/activity`
+Query: `eventId?`, `before?` (ISO timestamp cursor), `limit?` (1–200, default 50).
+
+```json
+{
+  "rows": [{
+    "id": "...", "action": "ENTRY_CREATED_CASH_CONFIRMED", "eventId": "...", "eventName": "...",
+    "actor": { "kind": "TEAM", "name": "Kumar Organizer" },
+    "metadata": { "entryCode": "MOI-000002", "amountPaise": 250000 },
+    "createdAt": "..."
+  }],
+  "hasMore": true,
+  "nextBefore": "2026-10-14T09:12:44.120Z"
+}
+```
+
+`actor.kind` is `TEAM`, `PLATFORM` (a super admin action), `GUEST` or
+`SYSTEM`. Owners see every row in their workspace; event staff see only rows
+for events they are assigned to. A requested `eventId` outside the caller's
+access is `403`. Guest IP addresses are never returned.
 
 ---
 
