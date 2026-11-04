@@ -108,6 +108,131 @@ function CredentialsCard({
   );
 }
 
+
+/** Readable random password, same shape the server generates. */
+export function generatePassword(): string {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  for (;;) {
+    const bytes = new Uint32Array(12);
+    crypto.getRandomValues(bytes);
+    const raw = Array.from(bytes, (n) => alphabet[n % alphabet.length]).join('');
+    if (/[A-Z]/.test(raw) && /[a-z]/.test(raw) && /[2-9]/.test(raw)) {
+      return raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
+    }
+  }
+}
+
+/** Password input with show/hide and a Generate button. */
+function PasswordField({
+  id,
+  label,
+  value,
+  onChange,
+  required = false,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="grow">
+      <label htmlFor={id}>{label}</label>
+      <div className="toolbar" style={{ marginBottom: 0, flexWrap: 'nowrap' }}>
+        <input
+          id={id}
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={(domEvent) => onChange(domEvent.target.value)}
+          minLength={value ? 10 : undefined}
+          required={required}
+          autoComplete="new-password"
+          placeholder="At least 10 characters"
+        />
+        <button
+          className="btn secondary small"
+          type="button"
+          onClick={() => setVisible((current) => !current)}
+        >
+          {visible ? 'Hide' : 'Show'}
+        </button>
+        <button
+          className="btn secondary small"
+          type="button"
+          onClick={() => {
+            onChange(generatePassword());
+            setVisible(true);
+          }}
+        >
+          Generate
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Sets an organizer's password from the console. Organizers cannot change
+ * their own, so this is the only place it changes.
+ */
+function SetPasswordForm({
+  member,
+  onSaved,
+  onCancel,
+}: {
+  member: PlatformMember;
+  onSaved: (password: string) => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(formEvent: React.FormEvent) {
+    formEvent.preventDefault();
+    setError(null);
+    if (password.length < 10) {
+      setError('Use at least 10 characters, or press Generate.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await api.platform.resetPassword(member.id, password);
+      onSaved(result.password);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not set the password');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="inline-form" onSubmit={submit}>
+      {error ? <div className="alert err">{error}</div> : null}
+      <div className="toolbar">
+        <PasswordField
+          id={'pw-' + member.id}
+          label={'New password for ' + member.name + ' (' + member.email + ')'}
+          value={password}
+          onChange={setPassword}
+          required
+        />
+        <button className="btn" type="submit" disabled={busy}>
+          {busy ? 'Saving...' : 'Save password'}
+        </button>
+        <button className="btn secondary" type="button" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+      <p className="muted">
+        Their current password and any open sessions stop working as soon as you save.
+      </p>
+    </form>
+  );
+}
+
 function ProvisionForm({
   onCreated,
   onCancel,
@@ -124,15 +249,21 @@ function ProvisionForm({
   const [venue, setVenue] = useState('');
   const [upiId, setUpiId] = useState('');
   const [payeeName, setPayeeName] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function submit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
     setError(null);
+    if (password && password.length < 10) {
+      setError('The password must be at least 10 characters, or leave it empty to generate one.');
+      return;
+    }
     setBusy(true);
     try {
       const result = await api.platform.provisionOrganizer({
+        password: password || undefined,
         upiId: upiId.trim(),
         payeeName: payeeName.trim() || organizerName.trim(),
         organizerName: organizerName.trim(),
@@ -235,6 +366,15 @@ function ProvisionForm({
             onChange={(domEvent) => setOrganizerPhone(domEvent.target.value)}
           />
         </div>
+      </div>
+
+      <div className="toolbar">
+        <PasswordField
+          id="p-password"
+          label="Organizer password (leave empty to generate one)"
+          value={password}
+          onChange={setPassword}
+        />
       </div>
 
       <h3>Organizer's UPI account</h3>
@@ -388,6 +528,7 @@ export function PlatformPage() {
   const [credentials, setCredentials] = useState<IssuedCredentials | null>(null);
   const [addingEventFor, setAddingEventFor] = useState<string | null>(null);
   const [suspending, setSuspending] = useState<{ id: string; reason: string } | null>(null);
+  const [settingPasswordFor, setSettingPasswordFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
 
@@ -419,35 +560,17 @@ export function PlatformPage() {
     }
   }
 
-  /**
-   * Organizers cannot change their own password; this is the only way it
-   * changes. Type one, or leave the box empty to have one generated.
-   */
-  async function resetPassword(member: PlatformMember) {
-    const typed = window.prompt(
-      'New password for ' +
-        member.name +
-        ' (at least 10 characters).\nLeave empty to generate one.\n\n' +
-        'Their current password and open sessions stop working immediately.',
-      '',
-    );
-    if (typed === null) return;
-    const chosen = typed.trim();
-    if (chosen && chosen.length < 10) {
-      setError('A password must be at least 10 characters.');
-      return;
-    }
-    await act(async () => {
-      const result = await api.platform.resetPassword(member.id, chosen || undefined);
-      setCredentials({
-        name: result.user.name,
-        email: result.user.email,
-        password: result.password,
-        eventName: null,
-        reason: 'RESET',
-      });
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+  function passwordSaved(member: PlatformMember, password: string) {
+    setSettingPasswordFor(null);
+    setCredentials({
+      name: member.name,
+      email: member.email,
+      password,
+      eventName: null,
+      reason: 'RESET',
     });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    void load();
   }
 
   function openWorkspace(workspace: PlatformWorkspace, path = '/') {
@@ -691,9 +814,13 @@ export function PlatformPage() {
                               className="btn secondary small"
                               type="button"
                               disabled={busy}
-                              onClick={() => resetPassword(member)}
+                              onClick={() =>
+                                setSettingPasswordFor(
+                                  settingPasswordFor === member.id ? null : member.id,
+                                )
+                              }
                             >
-                              Set password
+                              {settingPasswordFor === member.id ? 'Close' : 'Change password'}
                             </button>
                             <button
                               className={'btn small ' + (member.isActive ? 'danger' : 'secondary')}
@@ -719,6 +846,17 @@ export function PlatformPage() {
               </tbody>
             </table>
           </div>
+
+          {workspace.members
+            .filter((member) => member.id === settingPasswordFor)
+            .map((member) => (
+              <SetPasswordForm
+                key={member.id}
+                member={member}
+                onCancel={() => setSettingPasswordFor(null)}
+                onSaved={(password) => passwordSaved(member, password)}
+              />
+            ))}
 
           <h3>Events</h3>
           <div className="table-wrap">

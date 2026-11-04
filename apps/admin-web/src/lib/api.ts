@@ -441,6 +441,8 @@ export const api = {
       venue?: string;
       upiId: string;
       payeeName: string;
+      /** Left out: the server generates one. */
+      password?: string;
     }) =>
       request<ProvisionResult>('/admin/platform/organizers', { method: 'POST', body: payload }),
 

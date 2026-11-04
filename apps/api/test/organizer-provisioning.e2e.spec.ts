@@ -150,6 +150,44 @@ describe('super admin provisions organizers', () => {
     expect(await ctx.prisma.workspace.count()).toBe(2);
   });
 
+  it('uses a password the super admin types instead of generating one', async () => {
+    const response = await ctx.post(
+      '/admin/platform/organizers',
+      {
+        organizerName: 'Typed Password',
+        organizerEmail: 'typed@test.local',
+        eventName: 'Typed Password Event',
+        eventDate: '2026-12-06T10:00:00.000Z',
+        upiId: 'typed@okicici',
+        payeeName: 'Typed',
+        password: 'Typed-by-super-1',
+      },
+      superToken,
+    );
+    expect(response.status).toBe(201);
+    expect(response.body.password).toBe('Typed-by-super-1');
+    expect((await ctx.post('/admin/auth/login', {
+      email: 'typed@test.local',
+      password: 'Typed-by-super-1',
+    })).status).toBe(201);
+
+    const tooShort = await ctx.post(
+      '/admin/platform/organizers',
+      {
+        organizerName: 'Short',
+        organizerEmail: 'short@test.local',
+        eventName: 'Short Event',
+        eventDate: '2026-12-06T10:00:00.000Z',
+        upiId: 'short@okicici',
+        payeeName: 'Short',
+        password: 'short',
+      },
+      superToken,
+    );
+    expect(tooShort.status).toBe(400);
+
+  });
+
   it('requires the organizer UPI account', async () => {
     const response = await ctx.post(
       '/admin/platform/organizers',

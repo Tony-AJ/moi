@@ -173,7 +173,7 @@ export class PlatformService {
       this.events.uniqueSlug(dto.eventName),
     ]);
 
-    const password = generateTemporaryPassword();
+    const password = dto.password ?? generateTemporaryPassword();
     const passwordHash = await bcrypt.hash(password, 12);
     const now = new Date();
 

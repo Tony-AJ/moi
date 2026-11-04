@@ -71,6 +71,12 @@ export class ProvisionOrganizerDto {
   @Transform(trim)
   @Length(2, 120)
   payeeName!: string;
+
+  /** Organizer's password, chosen by the super admin. Left out: generated. */
+  @IsOptional()
+  @IsString()
+  @Length(10, 128, { message: 'Password must be at least 10 characters' })
+  password?: string;
 }
 
 /** Another event for an organizer who already has a workspace. */
