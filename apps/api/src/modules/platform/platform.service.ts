@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AdminEventsService } from '../admin-events/admin-events.service';
@@ -26,10 +27,10 @@ const DEFAULT_SUGGESTED_AMOUNTS = [50000, 100000, 200000, 500000];
  * What a platform operator does: provision organizers, issue and reset their
  * logins, and suspend or restore access.
  *
- * What it deliberately does not do is read a customer's register. Nothing
- * here returns guest names, amounts or totals; the overview carries counts
- * and statuses only. Seeing an event's money still requires a membership in
- * its workspace, exactly as before.
+ * The super admin also runs every event: only they create events, they set
+ * each organizer's UPI account, and they see every event's totals. To work
+ * inside one organizer's register (entries, reconciliation, reports) the
+ * admin app sends that workspace in the X-Workspace-Id header.
  */
 @Injectable()
 export class PlatformService {
@@ -80,6 +81,7 @@ export class PlatformService {
             venue: true,
             isOpen: true,
             activePaymentConfigId: true,
+            activePaymentConfig: { select: { upiIdSnapshot: true, payeeNameSnapshot: true } },
             createdAt: true,
             _count: { select: { entries: true } },
           },
@@ -95,6 +97,28 @@ export class PlatformService {
           _max: { createdAt: true },
         })
       : [];
+    // The super admin runs every event, so the console carries the money
+    // figures too: submitted claims and the bank-verified total, separately.
+    const money = eventIds.length
+      ? await this.prisma.moiEntry.groupBy({
+          by: ['eventId', 'paymentStatus'],
+          where: { eventId: { in: eventIds } },
+          _count: { _all: true },
+          _sum: { amountPaise: true },
+        })
+      : [];
+    const totalsFor = (eventId: string) => {
+      const rows = money.filter((row) => row.eventId === eventId);
+      const verified = rows.find((row) => row.paymentStatus === 'VERIFIED');
+      return {
+        submittedPaise: rows.reduce((acc, row) => acc + (row._sum.amountPaise ?? 0), 0),
+        verifiedPaise: verified?._sum.amountPaise ?? 0,
+        verifiedCount: verified?._count._all ?? 0,
+        reviewCount:
+          rows.find((row) => row.paymentStatus === 'REVIEW_REQUIRED')?._count._all ?? 0,
+      };
+    };
+
     const lastActivityByEvent = new Map(
       lastActivity.map((row) => [row.eventId, row._max.createdAt]),
     );
@@ -121,7 +145,10 @@ export class PlatformService {
         // The organizer has to add and confirm their own UPI account. Until
         // then the event can record cash but cannot take UPI payments.
         paymentReady: Boolean(event.activePaymentConfigId),
+        upiId: event.activePaymentConfig?.upiIdSnapshot ?? null,
+        payeeName: event.activePaymentConfig?.payeeNameSnapshot ?? null,
         entryCount: event._count.entries,
+        totals: totalsFor(event.id),
         lastActivityAt: lastActivityByEvent.get(event.id) ?? null,
         createdAt: event.createdAt,
       })),
@@ -200,6 +227,14 @@ export class PlatformService {
         },
       });
 
+      await this.attachPayee(tx, {
+        workspaceId: workspace.id,
+        eventId: event.id,
+        upiId: dto.upiId,
+        payeeName: dto.payeeName,
+        actorId: actor.id,
+      });
+
       return { workspace, organizer, event };
     });
 
@@ -262,16 +297,45 @@ export class PlatformService {
     });
     if (!workspace) throw new NotFoundException('Workspace not found');
 
-    const event = await this.prisma.event.create({
-      data: {
-        workspaceId,
-        slug: await this.events.uniqueSlug(dto.eventName),
-        name: dto.eventName,
-        hostName: dto.hostName || null,
-        eventDate: new Date(dto.eventDate),
-        venue: dto.venue || null,
-        suggestedAmounts: DEFAULT_SUGGESTED_AMOUNTS,
-      },
+    const event = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.event.create({
+        data: {
+          workspaceId,
+          slug: await this.events.uniqueSlug(dto.eventName),
+          name: dto.eventName,
+          hostName: dto.hostName || null,
+          eventDate: new Date(dto.eventDate),
+          venue: dto.venue || null,
+          suggestedAmounts: DEFAULT_SUGGESTED_AMOUNTS,
+        },
+      });
+
+      if (dto.upiId) {
+        await this.attachPayee(tx, {
+          workspaceId,
+          eventId: created.id,
+          upiId: dto.upiId,
+          payeeName: dto.payeeName ?? dto.upiId,
+          actorId: actor.id,
+        });
+      } else {
+        // Same organizer, same account as before unless told otherwise.
+        const existing = await tx.beneficiaryAccount.findFirst({
+          where: { workspaceId, status: 'CONFIRMED' },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (existing) {
+          await this.attachPayee(tx, {
+            workspaceId,
+            eventId: created.id,
+            upiId: existing.upiId,
+            payeeName: existing.payeeName,
+            actorId: actor.id,
+          });
+        }
+      }
+
+      return created;
     });
 
     await this.audit.record({
@@ -426,6 +490,66 @@ export class PlatformService {
       email: target.email,
       primaryWorkspaceId: target.memberships[0]?.workspaceId ?? null,
     };
+  }
+
+  /**
+   * Points an event at a UPI account in its workspace, creating and
+   * confirming the account if it is new. The super admin entering the
+   * organizer's UPI id is the confirmation; statement reconciliation is
+   * what later proves money actually arrived there.
+   */
+  private async attachPayee(
+    tx: Prisma.TransactionClient,
+    params: {
+      workspaceId: string;
+      eventId: string;
+      upiId: string;
+      payeeName: string;
+      actorId: string;
+    },
+  ) {
+    const now = new Date();
+    const account = await tx.beneficiaryAccount.upsert({
+      where: { workspaceId_upiId: { workspaceId: params.workspaceId, upiId: params.upiId } },
+      update: {
+        status: 'CONFIRMED',
+        confirmedAt: now,
+        confirmedByUserId: params.actorId,
+      },
+      create: {
+        workspaceId: params.workspaceId,
+        label: 'Collection account',
+        upiId: params.upiId,
+        payeeName: params.payeeName,
+        status: 'CONFIRMED',
+        confirmedAt: now,
+        confirmedByUserId: params.actorId,
+      },
+    });
+
+    const latest = await tx.eventPaymentConfig.findFirst({
+      where: { eventId: params.eventId },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    });
+    const config = await tx.eventPaymentConfig.create({
+      data: {
+        eventId: params.eventId,
+        beneficiaryAccountId: account.id,
+        version: (latest?.version ?? 0) + 1,
+        upiIdSnapshot: account.upiId,
+        payeeNameSnapshot: account.payeeName,
+        createdByUserId: params.actorId,
+      },
+    });
+    await tx.event.update({
+      where: { id: params.eventId },
+      data: {
+        activePaymentConfigId: config.id,
+        upiId: account.upiId,
+        upiPayeeName: account.payeeName,
+      },
+    });
   }
 
   private async uniqueWorkspaceSlug(name: string): Promise<string> {

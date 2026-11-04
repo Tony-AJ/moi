@@ -1,11 +1,12 @@
 /**
  * Super admin provisioning of event organizers, end to end.
  *
- * The workflow under test: a platform super admin creates an event together
- * with an organizer login and hands over a one-time password. Each organizer
- * signs in, must replace that password, and from then on sees and manages
- * only their own event: its details, its register, its reports and its
- * activity. Two organizers are provisioned side by side so every isolation
+ * The workflow under test: the platform super admin has full control. Only
+ * they create events, each against a chosen organizer, and they set that
+ * organizer's UPI account. They hand over a one-time password; the organizer
+ * signs in, must replace it, and from then on sees and manages only their own
+ * event: its details, its register, its reports and its activity. The super
+ * admin can open any organizer's register and export its reports. Two organizers are provisioned side by side so every isolation
  * claim is checked against a real neighbour rather than an empty database.
  *
  * Runs against a throwaway Postgres (TEST_DATABASE_URL), like the other e2e
@@ -58,6 +59,8 @@ async function provision(key: string): Promise<Organizer> {
       eventDate: '2026-12-05T10:00:00.000Z',
       hostName: key + ' Family',
       venue: key + ' Mahal',
+      upiId: key.toLowerCase() + '.family@okicici',
+      payeeName: key + ' Family',
     },
     superToken,
   );
@@ -115,11 +118,18 @@ describe('super admin provisions organizers', () => {
       status: 'ACTIVE',
     });
 
-    const event = await ctx.prisma.event.findUniqueOrThrow({ where: { id: organizerA.eventId } });
+    const event = await ctx.prisma.event.findUniqueOrThrow({
+      where: { id: organizerA.eventId },
+      include: { activePaymentConfig: { include: { beneficiaryAccount: true } } },
+    });
     expect(event.workspaceId).toBe(organizerA.workspaceId);
-    // No payee is chosen for the organizer: the platform never decides where
-    // a family's money goes.
-    expect(event.activePaymentConfigId).toBeNull();
+    // The super admin set the organizer's UPI account, so the event can take
+    // UPI payments straight away.
+    expect(event.activePaymentConfig?.upiIdSnapshot).toBe('kumar.family@okicici');
+    expect(event.activePaymentConfig?.beneficiaryAccount.status).toBe('CONFIRMED');
+    expect(event.activePaymentConfig?.beneficiaryAccount.workspaceId).toBe(
+      organizerA.workspaceId,
+    );
   });
 
   it('provisions a second, unrelated organizer', async () => {
@@ -136,12 +146,29 @@ describe('super admin provisions organizers', () => {
         organizerEmail: organizerA.email.toUpperCase(),
         eventName: 'Another Event',
         eventDate: '2026-12-06T10:00:00.000Z',
+        upiId: 'dup@okicici',
+        payeeName: 'Duplicate',
       },
       superToken,
     );
     expect(response.status).toBe(409);
     // Nothing half-created by the refused call.
     expect(await ctx.prisma.workspace.count()).toBe(2);
+  });
+
+  it('requires the organizer UPI account', async () => {
+    const response = await ctx.post(
+      '/admin/platform/organizers',
+      {
+        organizerName: 'No UPI',
+        organizerEmail: 'noupi@test.local',
+        eventName: 'No UPI Event',
+        eventDate: '2026-12-06T10:00:00.000Z',
+      },
+      superToken,
+    );
+    expect(response.status).toBe(400);
+    expect(await ctx.prisma.adminUser.count({ where: { email: 'noupi@test.local' } })).toBe(0);
   });
 
   it('validates the request before creating anything', async () => {
@@ -278,6 +305,27 @@ describe('each organizer sees only their own event', () => {
     });
   });
 
+  it('does not let an organizer create events or change the UPI account', async () => {
+    const create = await ctx.post(
+      '/admin/events',
+      { name: 'Organizer made event', eventDate: '2026-12-07T10:00:00.000Z' },
+      organizerA.token,
+    );
+    expect(create.status).toBe(403);
+
+    const account = await ctx.post(
+      '/admin/beneficiaries',
+      { label: 'Mine', upiId: 'kumar.other@okicici', payeeName: 'Kumar' },
+      organizerA.token,
+    );
+    expect(account.status).toBe(403);
+
+    // Reading the configured account is still allowed.
+    const list = await ctx.get('/admin/beneficiaries', organizerA.token);
+    expect(list.status).toBe(200);
+    expect(list.body.map((row: { upiId: string }) => row.upiId)).toEqual(['kumar.family@okicici']);
+  });
+
   it('exports a report for the organizer’s own event only', async () => {
     const own = await ctx.get(
       '/admin/reports/export?format=xlsx&eventId=' + organizerA.eventId,
@@ -301,6 +349,8 @@ describe('each organizer sees only their own event', () => {
         organizerEmail: 'sneaky@test.local',
         eventName: 'Sneaky Event',
         eventDate: '2026-12-06T10:00:00.000Z',
+        upiId: 'sneaky@okicici',
+        payeeName: 'Sneaky',
       },
       organizerA.token,
     );
@@ -397,8 +447,8 @@ describe('activity feed', () => {
   });
 });
 
-describe('what the super admin can and cannot see', () => {
-  it('shows counts and statuses, never guest names or amounts', async () => {
+describe('the super admin sees and runs every event', () => {
+  it('shows each event’s payee and money totals in the console', async () => {
     const overview = await ctx.get('/admin/platform/overview', superToken);
     const workspaceA = overview.body.find(
       (workspace: { id: string }) => workspace.id === organizerA.workspaceId,
@@ -407,29 +457,58 @@ describe('what the super admin can and cannot see', () => {
     expect(workspaceA.events[0]).toMatchObject({
       id: organizerA.eventId,
       entryCount: 2,
-      paymentReady: false,
+      paymentReady: true,
+      upiId: 'kumar.family@okicici',
+      totals: { submittedPaise: 350000, verifiedPaise: 250000, verifiedCount: 1 },
     });
     expect(workspaceA.members[0]).toMatchObject({
       email: organizerA.email,
       role: 'WORKSPACE_OWNER',
       mustChangePassword: false,
     });
-    expect(workspaceA.members[0].lastLoginAt).not.toBeNull();
-
-    const serialized = JSON.stringify(overview.body);
-    expect(serialized).not.toContain('Arun Kumar');
-    expect(serialized).not.toContain('Meena Rajan');
-    expect(serialized).not.toMatch(/amountPaise|verifiedPaise|submittedPaise|passwordHash/);
+    expect(JSON.stringify(overview.body)).not.toMatch(/passwordHash/);
   });
 
-  it('still has no implicit read of an organizer’s register', async () => {
-    expect((await ctx.get('/admin/events', superToken)).status).toBe(403);
+  it('reads an organizer’s register and exports its report when it names the workspace', async () => {
+    // No workspace named: refused rather than guessing.
     expect((await ctx.get('/admin/entries', superToken)).status).toBe(403);
-    expect((await ctx.get('/admin/activity', superToken)).status).toBe(403);
-    expect(
-      (await ctx.get('/admin/reports/export?format=xlsx&eventId=' + organizerA.eventId, superToken))
-        .status,
-    ).toBe(403);
+
+    const entries = await ctx.call('GET', '/admin/entries?eventId=' + organizerA.eventId, {
+      token: superToken,
+    });
+    expect(entries.status).toBe(200);
+    expect(entries.body.rows.map((row: { guestName: string }) => row.guestName).sort()).toEqual([
+      'Arun Kumar',
+      'Meena Rajan',
+    ]);
+
+    const viaHeader = await fetch(ctx.baseUrl + '/admin/activity', {
+      headers: { Authorization: 'Bearer ' + superToken, 'X-Workspace-Id': organizerA.workspaceId },
+    });
+    expect(viaHeader.status).toBe(200);
+
+    const report = await ctx.get(
+      '/admin/reports/export?format=pdf&eventId=' + organizerA.eventId,
+      superToken,
+    );
+    expect(report.status).toBe(200);
+  });
+
+  it('creates another event for an organizer from the organizer’s own workspace', async () => {
+    const created = await ctx.post(
+      '/admin/events',
+      {
+        workspaceId: organizerB.workspaceId,
+        name: 'Raman Engagement',
+        eventDate: '2026-11-20T10:00:00.000Z',
+      },
+      superToken,
+    );
+    expect(created.status).toBe(201);
+    const stored = await ctx.prisma.event.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.workspaceId).toBe(organizerB.workspaceId);
+    // Remove it again so the rest of the suite sees one event for B.
+    await ctx.prisma.event.delete({ where: { id: created.body.id } });
   });
 });
 
@@ -551,6 +630,11 @@ describe('credential lifecycle', () => {
       superToken,
     );
     expect(added.status).toBe(201);
+    const addedEvent = await ctx.prisma.event.findUniqueOrThrow({
+      where: { id: added.body.id },
+      include: { activePaymentConfig: true },
+    });
+    expect(addedEvent.activePaymentConfig?.upiIdSnapshot).toBe('kumar.family@okicici');
 
     const a = await ctx.get('/admin/events', organizerA.token);
     expect(a.body.map((event: { id: string }) => event.id).sort()).toEqual(

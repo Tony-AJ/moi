@@ -60,6 +60,17 @@ export class ProvisionOrganizerDto {
   @Transform(trim)
   @Length(0, 240)
   venue?: string;
+
+  /** The organizer's UPI account. Guests pay straight into it. */
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Matches(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, { message: 'Enter a valid UPI ID' })
+  upiId!: string;
+
+  @IsString()
+  @Transform(trim)
+  @Length(2, 120)
+  payeeName!: string;
 }
 
 /** Another event for an organizer who already has a workspace. */
@@ -83,6 +94,22 @@ export class AddWorkspaceEventDto {
   @Transform(trim)
   @Length(0, 240)
   venue?: string;
+
+  /**
+   * Optional: leave out to reuse the organizer's existing confirmed UPI
+   * account, give one to collect this event into a different account.
+   */
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Matches(/^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/, { message: 'Enter a valid UPI ID' })
+  upiId?: string;
+
+  @ValidateIf((dto: AddWorkspaceEventDto) => Boolean(dto.upiId))
+  @IsString()
+  @Transform(trim)
+  @Length(2, 120)
+  payeeName?: string;
 }
 
 export class UpdatePlatformUserDto {

@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
+  actingWorkspace,
   api,
+  downloadBlob,
   formatDate,
   formatDateTime,
+  formatInr,
   type PlatformMember,
   type PlatformWorkspace,
 } from '../lib/api';
@@ -119,6 +123,8 @@ function ProvisionForm({
   const [eventDate, setEventDate] = useState('');
   const [hostName, setHostName] = useState('');
   const [venue, setVenue] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [payeeName, setPayeeName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -128,6 +134,8 @@ function ProvisionForm({
     setBusy(true);
     try {
       const result = await api.platform.provisionOrganizer({
+        upiId: upiId.trim(),
+        payeeName: payeeName.trim() || organizerName.trim(),
         organizerName: organizerName.trim(),
         organizerEmail: organizerEmail.trim(),
         organizerPhone: organizerPhone.trim() || undefined,
@@ -154,9 +162,9 @@ function ProvisionForm({
     <form className="panel" onSubmit={submit}>
       <h2>New event and organizer login</h2>
       <p className="muted">
-        Creates the event, a separate workspace for it, and a login for the organizer. The
-        organizer then fills in the event details and their own UPI account; you never choose
-        where their money goes.
+        Creates the event against this organizer in their own workspace, sets the UPI account
+        guests will pay into, and issues the organizer's login. The organizer can edit the event
+        details but cannot create events or change the UPI account.
       </p>
       {error ? <div className="alert err">{error}</div> : null}
 
@@ -230,6 +238,33 @@ function ProvisionForm({
         </div>
       </div>
 
+      <h3>Organizer's UPI account</h3>
+      <div className="toolbar">
+        <div className="grow">
+          <label htmlFor="p-upi">UPI ID (guests pay here)</label>
+          <input
+            id="p-upi"
+            value={upiId}
+            onChange={(domEvent) => setUpiId(domEvent.target.value)}
+            placeholder="familyname@okicici"
+            required
+          />
+        </div>
+        <div className="grow">
+          <label htmlFor="p-payee">Payee name shown in the UPI app</label>
+          <input
+            id="p-payee"
+            value={payeeName}
+            onChange={(domEvent) => setPayeeName(domEvent.target.value)}
+            placeholder="Defaults to the organizer's name"
+          />
+        </div>
+      </div>
+      <p className="muted">
+        Check this ID with the organizer before saving: every UPI contribution for the event goes
+        straight into it.
+      </p>
+
       <div className="row-actions">
         <button className="btn" type="submit" disabled={busy}>
           {busy ? 'Creating...' : 'Create event and login'}
@@ -253,8 +288,11 @@ function AddEventForm({
 }) {
   const [eventName, setEventName] = useState('');
   const [eventDate, setEventDate] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [payeeName, setPayeeName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const currentUpi = workspace.events.find((event) => event.upiId)?.upiId ?? null;
 
   async function submit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
@@ -264,6 +302,8 @@ function AddEventForm({
       await api.platform.addEvent(workspace.id, {
         eventName: eventName.trim(),
         eventDate: new Date(eventDate + 'T10:00:00').toISOString(),
+        upiId: upiId.trim() || undefined,
+        payeeName: upiId.trim() ? payeeName.trim() || workspace.name : undefined,
       });
       await onAdded();
     } catch (addError) {
@@ -303,6 +343,28 @@ function AddEventForm({
           Cancel
         </button>
       </div>
+      <div className="toolbar">
+        <div className="grow">
+          <label htmlFor={'add-upi-' + workspace.id}>
+            UPI ID {currentUpi ? '(leave blank to keep ' + currentUpi + ')' : ''}
+          </label>
+          <input
+            id={'add-upi-' + workspace.id}
+            value={upiId}
+            onChange={(domEvent) => setUpiId(domEvent.target.value)}
+            placeholder="familyname@okicici"
+            required={!currentUpi}
+          />
+        </div>
+        <div className="grow">
+          <label htmlFor={'add-payee-' + workspace.id}>Payee name</label>
+          <input
+            id={'add-payee-' + workspace.id}
+            value={payeeName}
+            onChange={(domEvent) => setPayeeName(domEvent.target.value)}
+          />
+        </div>
+      </div>
       <p className="muted">The organizer sees it straight away with their existing login.</p>
     </form>
   );
@@ -328,8 +390,11 @@ export function PlatformPage() {
   const [addingEventFor, setAddingEventFor] = useState<string | null>(null);
   const [suspending, setSuspending] = useState<{ id: string; reason: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
+    // Back in the console means no longer acting inside one organizer.
+    actingWorkspace.clear();
     try {
       setWorkspaces(await api.platform.overview());
       setError(null);
@@ -378,6 +443,28 @@ export function PlatformPage() {
     });
   }
 
+  function openWorkspace(workspace: PlatformWorkspace, path = '/') {
+    actingWorkspace.set({ id: workspace.id, name: workspace.name });
+    navigate(path);
+  }
+
+  async function downloadReport(
+    workspace: PlatformWorkspace,
+    eventId: string,
+    slug: string,
+    format: 'xlsx' | 'pdf',
+  ) {
+    await act(async () => {
+      actingWorkspace.set({ id: workspace.id, name: workspace.name });
+      try {
+        const blob = await api.exportReport(format, { eventId });
+        downloadBlob(blob, 'moi-register-' + slug + '.' + format);
+      } finally {
+        actingWorkspace.clear();
+      }
+    });
+  }
+
   async function toggleLogin(member: PlatformMember) {
     const verb = member.isActive ? 'Disable' : 'Enable';
     if (!window.confirm(verb + ' the login for ' + member.name + '?')) return;
@@ -393,14 +480,15 @@ export function PlatformPage() {
     .flatMap((workspace) => workspace.members)
     .filter((member) => member.isActive && member.mustChangePassword).length;
   const paymentPending = allEvents.filter((event) => !event.paymentReady).length;
+  const verifiedTotal = allEvents.reduce((acc, event) => acc + event.totals.verifiedPaise, 0);
 
   return (
     <>
       <h1>Organizers &amp; events</h1>
       <p className="page-sub">
-        Create an event, hand its organizer a login, and keep an eye on setup. Each organizer works
-        in a separate workspace and sees only their own events. Guest names, amounts and reports
-        stay with the organizer.
+        You create every event against an organizer, set its UPI account, and can open any
+        organizer's register, reconciliation and reports. Each organizer sees only their own
+        events.
       </p>
 
       {error ? <div className="alert err">{error}</div> : null}
@@ -425,7 +513,10 @@ export function PlatformPage() {
         <div className="stat review">
           <div className="label">UPI not set up</div>
           <div className="value">{paymentPending}</div>
-          <div className="foot">organizer still has to add their account</div>
+        </div>
+        <div className="stat ok">
+          <div className="label">Verified Moi, all events</div>
+          <div className="value">{formatInr(verifiedTotal)}</div>
         </div>
       </div>
 
@@ -470,6 +561,14 @@ export function PlatformPage() {
               ) : null}
             </div>
             <div className="row-actions">
+              <button
+                className="btn small"
+                type="button"
+                disabled={busy}
+                onClick={() => openWorkspace(workspace)}
+              >
+                Open register
+              </button>
               <button
                 className="btn secondary small"
                 type="button"
@@ -624,8 +723,10 @@ export function PlatformPage() {
                   <th>Guest form</th>
                   <th>UPI</th>
                   <th className="num">Entries</th>
+                  <th className="num">Verified</th>
+                  <th className="num">Submitted</th>
                   <th>Last activity</th>
-                  <th>Guest link</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -639,23 +740,45 @@ export function PlatformPage() {
                       </span>
                     </td>
                     <td>
-                      <span
-                        className={'badge ' + (event.paymentReady ? 'VERIFIED' : 'AWAITING_VERIFICATION')}
-                      >
-                        {event.paymentReady ? 'Ready' : 'Not set up'}
-                      </span>
+                      {event.upiId ? (
+                        <span className="mono" title={event.payeeName ?? ''}>
+                          {event.upiId}
+                        </span>
+                      ) : (
+                        <span className="badge AWAITING_VERIFICATION">Not set up</span>
+                      )}
                     </td>
                     <td className="num">{event.entryCount}</td>
+                    <td className="num">{formatInr(event.totals.verifiedPaise)}</td>
+                    <td className="num">{formatInr(event.totals.submittedPaise)}</td>
                     <td>{event.lastActivityAt ? formatDateTime(event.lastActivityAt) : '-'}</td>
                     <td>
-                      <button
-                        className="btn secondary small"
-                        type="button"
-                        onClick={() => navigator.clipboard?.writeText(event.guestUrl)}
-                        title={event.guestUrl}
-                      >
-                        Copy link
-                      </button>
+                      <div className="row-actions">
+                        <button
+                          className="btn secondary small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => downloadReport(workspace, event.id, event.slug, 'xlsx')}
+                        >
+                          Excel
+                        </button>
+                        <button
+                          className="btn secondary small"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => downloadReport(workspace, event.id, event.slug, 'pdf')}
+                        >
+                          PDF
+                        </button>
+                        <button
+                          className="btn secondary small"
+                          type="button"
+                          onClick={() => navigator.clipboard?.writeText(event.guestUrl)}
+                          title={event.guestUrl}
+                        >
+                          Copy link
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

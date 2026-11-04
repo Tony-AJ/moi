@@ -308,39 +308,41 @@ The root `package.json` provides handy shortcuts for all database and Prisma ope
 
 ## Roles: Super Admin and Event Organizers
 
-MoiLedger is run by one platform operator for many families. Each event's
-organizer gets their own login and sees only their own event.
+MoiLedger is run by one platform super admin for many families. The super
+admin has full control; each organizer gets a login that sees only their own
+events.
 
 ```
-                         Super admin
-          creates the event + issues the organizer login
+                           Super admin
+   creates every event against an organizer, sets the organizer's UPI,
+   issues logins, opens any register, reconciles, exports any report
                                |
             +------------------+------------------+
             |                                     |
    Event A organizer                     Event B organizer
    own workspace, own login              own workspace, own login
-   fills in event details                fills in event details
-   adds their own UPI account            adds their own UPI account
-   register, reports, activity           register, reports, activity
+   edits event details                   edits event details
+   register, reconcile, reports          register, reconcile, reports
             |                                     |
             +----- cannot see each other ---------+
 ```
 
 | Who | Can | Cannot |
 | --- | --- | --- |
-| **Super admin** (`PlatformRole SUPER_ADMIN`) | Create an event with its organizer login; add more events for an existing organizer; reset an organizer's password; disable/enable a login; suspend/restore a workspace; see counts and setup status per event | See guest names, amounts, totals or reports; choose an organizer's UPI account; manage other super admins |
-| **Organizer** (`WORKSPACE_OWNER`) | Edit their event details; add and confirm their UPI account; record and verify entries; import statements; export reports; read their activity feed | See or touch any other organizer's event |
-| **Event staff** (`EVENT_STAFF`) | Whatever their per-event grants allow, on assigned events only | Anything outside their assigned events, including workspace-level activity |
+| **Super admin** (`PlatformRole SUPER_ADMIN`) | Create events (only role that can), each in a chosen organizer's workspace; set and change the organizer's UPI account; issue, reset and disable logins; suspend/restore a workspace; see every event's totals; open any organizer's entries, reconciliation, activity and reports | Manage other super admins |
+| **Organizer** (`WORKSPACE_OWNER`) | Edit their event details; record and verify entries; import statements; export reports; read their activity | Create events; add or change the UPI account; see any other organizer's event |
+| **Event staff** (`EVENT_STAFF`) | Whatever their per-event grants allow, on assigned events only | Anything outside their assigned events |
 
-**How a login is handed over**
+**Setting up an organizer**
 
-1. Super admin opens **Organizers & events** (`/platform`) and fills in the event name, date and the organizer's name and email.
-2. The system creates a separate workspace, the event, and the organizer login in one step, and shows a **one-time password** once, with a ready-to-send message.
-3. The organizer signs in with it and must choose their own password before anything else opens. The API enforces this, not only the UI, so a password sent over WhatsApp works exactly once.
-4. Forgot it? Super admin clicks **Reset password**: the old password stops working immediately and a new one-time password is shown.
+1. Super admin opens **Organizers & events** (`/platform`), enters the event, the organizer's name and email, and the organizer's **UPI ID**.
+2. One step creates the organizer's workspace, the event, the confirmed UPI account, and the login. A **one-time password** is shown once with a ready-to-send message.
+3. The organizer signs in and must set their own password before anything else opens (enforced by the API).
+4. **Open register** puts the super admin inside that organizer's workspace (sent as the `X-Workspace-Id` header); **Excel / PDF** on each event row downloads its report directly.
 
-Each organizer is a separate workspace, so isolation rests on the same
-tenant boundary the cross-tenant test suite already exercises.
+The super admin account can read every family's guest list and money, and
+decides where every event's payments go. Protect it with a long unique
+password and keep the number of super admins small.
 
 ---
 
@@ -375,10 +377,9 @@ Here is how the complete system functions from before the event until after the 
 ```
 
 ### Phase 1: Event Setup & QR Deployment
-1. The super admin creates the event and the organizer's login under **Organizers & events**, and sends the organizer the one-time password.
+1. The super admin creates the event against the organizer under **Organizers & events**, entering the organizer's UPI ID (e.g., `family@okicici`), and sends the organizer the one-time password.
 2. The organizer signs in to the Admin Portal (`:5174`) and sets their own password.
-3. Under **Event & QR → Edit details** they fill in the host name, venue, date, quick-pick amounts and phone requirements.
-4. Under **Payment accounts** they add their UPI ID (e.g., `family@okicici`), confirm it, and set it as the event's payee. Until then the event can record cash but not UPI payments.
+3. Under **Event & QR → Edit details** they fill in the host name, venue, date, quick-pick amounts and phone requirements. The UPI account is shown read-only; only the super admin changes it.
 5. The system produces a print-ready QR code that points to the public guest URL (`https://your-domain.com/e/kumar-wedding-2026`).
 6. The QR standee is printed and placed at the entrance or dining hall gift desk.
 7. Under **Activity**, the organizer can follow everything that happens on the event: registrations, references, verifications, imports, exports and changes.

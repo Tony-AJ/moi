@@ -24,10 +24,9 @@ export class ReportsController {
   ) {
     // An export is a bulk read of guest personal data, so the scope is
     // resolved from membership and the report is restricted to it.
-    const scope = await this.access.resolveScope(admin, query.workspaceId);
-    if (query.eventId) {
-      await this.access.assertEventAccess(admin, query.eventId, 'canExportReports');
-    }
+    const scope = query.eventId
+      ? await this.access.assertEventAccess(admin, query.eventId, 'canExportReports')
+      : await this.access.resolveScope(admin, query.workspaceId);
 
     const format = (query.format ?? 'xlsx').toLowerCase();
     if (format !== 'xlsx' && format !== 'pdf') {

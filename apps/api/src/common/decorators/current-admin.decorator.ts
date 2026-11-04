@@ -10,6 +10,11 @@ export interface AdminPrincipal {
   platformRole: PlatformRole;
   /** True while the user still holds a password somebody else issued. */
   mustChangePassword: boolean;
+  /**
+   * Workspace a super admin is acting in, from the X-Workspace-Id header.
+   * For anyone else it is only a request, checked against their memberships.
+   */
+  actingWorkspaceId?: string | null;
   name: string;
 }
 

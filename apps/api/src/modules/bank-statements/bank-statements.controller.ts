@@ -86,8 +86,9 @@ export class BankStatementsController {
     @Query('eventId') eventId?: string,
     @Query('workspaceId') workspaceId?: string,
   ) {
-    const scope = await this.access.resolveScope(admin, workspaceId);
-    if (eventId) await this.access.assertEventAccess(admin, eventId);
+    const scope = eventId
+      ? await this.access.assertEventAccess(admin, eventId)
+      : await this.access.resolveScope(admin, workspaceId);
     return this.statements.listImports({ workspaceId: scope.workspaceId, eventId });
   }
 
@@ -106,8 +107,9 @@ export class BankStatementsController {
       pageSize?: number;
     },
   ) {
-    const scope = await this.access.resolveScope(admin, query.workspaceId);
-    if (query.eventId) await this.access.assertEventAccess(admin, query.eventId);
+    const scope = query.eventId
+      ? await this.access.assertEventAccess(admin, query.eventId)
+      : await this.access.resolveScope(admin, query.workspaceId);
     // The resolved workspace overrides whatever the query string asked for.
     return this.statements.listTransactions({ ...query, workspaceId: scope.workspaceId });
   }

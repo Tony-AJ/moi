@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import {
   api,
   canManageWorkspace,
+  isSuperAdmin,
   formatDate,
   formatInr,
   type BeneficiaryAccount,
@@ -88,9 +89,12 @@ function GuestQr({ event }: { event: EventSummary }) {
 function BeneficiaryPanel({
   events,
   onChanged,
+  canEdit,
 }: {
   events: EventSummary[];
   onChanged: () => Promise<void>;
+  /** Only the super admin sets or changes an organizer's UPI account. */
+  canEdit: boolean;
 }) {
   const [accounts, setAccounts] = useState<BeneficiaryAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -204,7 +208,7 @@ function BeneficiaryPanel({
                 <td>{account.status === 'CONFIRMED' ? 'Confirmed' : 'Not confirmed'}</td>
                 <td>{account._count.paymentConfigs}</td>
                 <td>
-                  {account.status === 'CONFIRMED' ? null : (
+                  {!canEdit || account.status === 'CONFIRMED' ? null : (
                     <button
                       className="btn small"
                       type="button"
@@ -223,7 +227,11 @@ function BeneficiaryPanel({
         <div className="alert info">No payment account configured yet.</div>
       )}
 
-      {showForm ? (
+      {!canEdit ? (
+        <p className="muted">
+          The UPI account is set by the platform administrator. Contact them to change it.
+        </p>
+      ) : showForm ? (
         <form className="form" onSubmit={addAccount}>
           <div className="row">
             <div className="grow">
@@ -295,6 +303,8 @@ function BeneficiaryPanel({
         </button>
       )}
 
+      {canEdit ? (
+        <>
       <h3 style={{ marginTop: 20 }}>Set the payee for an event</h3>
       <p className="muted">
         Changing this starts a new configuration version. Contributions already recorded keep the
@@ -337,6 +347,8 @@ function BeneficiaryPanel({
           Set payee
         </button>
       </form>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -522,6 +534,8 @@ export function EventsPage() {
   // Workspace role, not the legacy flat role: an organizer provisioned by the
   // platform is the owner of their own workspace and nothing else.
   const isOwner = canManageWorkspace(admin);
+  // Events are created by the super admin, against this organizer.
+  const canCreateEvents = isSuperAdmin(admin);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -585,9 +599,9 @@ export function EventsPage() {
 
       {error ? <div className="alert err">{error}</div> : null}
 
-      <BeneficiaryPanel events={events} onChanged={reload} />
+      <BeneficiaryPanel events={events} onChanged={reload} canEdit={canCreateEvents} />
 
-      {isOwner ? (
+      {canCreateEvents ? (
         <div className="panel">
           {!showForm ? (
             <button className="btn" type="button" onClick={() => setShowForm(true)}>

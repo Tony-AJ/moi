@@ -1,5 +1,35 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) ?? 'http://localhost:4000/api';
 const TOKEN_KEY = 'moi:admin-token';
+const ACTING_KEY = 'moi:acting-workspace';
+
+/**
+ * The organizer workspace a super admin has opened from the console. Sent as
+ * X-Workspace-Id so every organizer screen works for them unchanged.
+ */
+export const actingWorkspace = {
+  get(): { id: string; name: string } | null {
+    try {
+      const raw = localStorage.getItem(ACTING_KEY);
+      return raw ? (JSON.parse(raw) as { id: string; name: string }) : null;
+    } catch {
+      return null;
+    }
+  },
+  set(workspace: { id: string; name: string }): void {
+    try {
+      localStorage.setItem(ACTING_KEY, JSON.stringify(workspace));
+    } catch {
+      // ignore
+    }
+  },
+  clear(): void {
+    try {
+      localStorage.removeItem(ACTING_KEY);
+    } catch {
+      // ignore
+    }
+  },
+};
 
 export type PaymentStatus =
   | 'AWAITING_VERIFICATION'
@@ -41,6 +71,7 @@ export const workspaceRole = (profile: AdminProfile | null): WorkspaceRole | nul
   profile?.memberships[0]?.role ?? null;
 
 export const canManageWorkspace = (profile: AdminProfile | null): boolean => {
+  if (isSuperAdmin(profile)) return true;
   const role = workspaceRole(profile);
   return role === 'WORKSPACE_OWNER' || role === 'WORKSPACE_ADMIN';
 };
@@ -65,6 +96,14 @@ export interface PlatformEvent {
   isOpen: boolean;
   guestUrl: string;
   paymentReady: boolean;
+  upiId: string | null;
+  payeeName: string | null;
+  totals: {
+    submittedPaise: number;
+    verifiedPaise: number;
+    verifiedCount: number;
+    reviewCount: number;
+  };
   entryCount: number;
   lastActivityAt: string | null;
   createdAt: string;
@@ -304,6 +343,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const headers: Record<string, string> = { ...(options.headers as Record<string, string>) };
   const token = auth.token;
   if (token) headers.Authorization = 'Bearer ' + token;
+  const acting = actingWorkspace.get();
+  if (acting) headers['X-Workspace-Id'] = acting.id;
 
   let body: BodyInit | undefined;
   if (options.body instanceof FormData) {
@@ -397,12 +438,21 @@ export const api = {
       eventDate: string;
       hostName?: string;
       venue?: string;
+      upiId: string;
+      payeeName: string;
     }) =>
       request<ProvisionResult>('/admin/platform/organizers', { method: 'POST', body: payload }),
 
     addEvent: (
       workspaceId: string,
-      payload: { eventName: string; eventDate: string; hostName?: string; venue?: string },
+      payload: {
+        eventName: string;
+        eventDate: string;
+        hostName?: string;
+        venue?: string;
+        upiId?: string;
+        payeeName?: string;
+      },
     ) =>
       request<PlatformEvent>('/admin/platform/workspaces/' + workspaceId + '/events', {
         method: 'POST',

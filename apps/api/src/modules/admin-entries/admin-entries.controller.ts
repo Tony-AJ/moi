@@ -20,10 +20,13 @@ export class AdminEntriesController {
 
   @Get('entries')
   async list(@Query() query: QueryEntriesDto, @CurrentAdmin() admin: AdminPrincipal) {
-    const scope = await this.access.resolveScope(admin, query.workspaceId);
-    // Asserted as well as filtered, so a foreign event id is an explicit
-    // refusal rather than a silently empty page.
-    if (query.eventId) await this.access.assertEventAccess(admin, query.eventId);
+    // An event, when given, decides the workspace: asserted rather than just
+    // filtered, so a foreign event id is an explicit refusal, not an empty
+    // page. It also lets the super admin open one event without naming its
+    // workspace separately.
+    const scope = query.eventId
+      ? await this.access.assertEventAccess(admin, query.eventId)
+      : await this.access.resolveScope(admin, query.workspaceId);
     return this.entries.list(query, scope);
   }
 
@@ -33,8 +36,9 @@ export class AdminEntriesController {
     @Query('eventId') eventId?: string,
     @Query('workspaceId') workspaceId?: string,
   ) {
-    const scope = await this.access.resolveScope(admin, workspaceId);
-    if (eventId) await this.access.assertEventAccess(admin, eventId);
+    const scope = eventId
+      ? await this.access.assertEventAccess(admin, eventId)
+      : await this.access.resolveScope(admin, workspaceId);
     return this.entries.stats(scope, eventId);
   }
 

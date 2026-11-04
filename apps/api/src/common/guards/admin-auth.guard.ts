@@ -95,6 +95,7 @@ export class AdminAuthGuard implements CanActivate {
       role: admin.role,
       platformRole: admin.platformRole,
       mustChangePassword: admin.mustChangePassword,
+      actingWorkspaceId: (request.headers?.['x-workspace-id'] as string | undefined) || null,
     };
     return true;
   }

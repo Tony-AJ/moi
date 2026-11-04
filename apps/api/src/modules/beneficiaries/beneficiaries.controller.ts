@@ -4,6 +4,7 @@ import { CreateBeneficiaryDto, SelectBeneficiaryDto } from './dto/beneficiary.dt
 import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
 import { WorkspaceAccessService } from '../workspaces/workspace-access.service';
+import { PlatformAdminOnly } from '../../common/decorators/platform-admin.decorator';
 
 @Controller('admin/beneficiaries')
 @UseGuards(AdminAuthGuard)
@@ -19,7 +20,9 @@ export class BeneficiariesController {
     return this.beneficiaries.list(scope);
   }
 
+  /** UPI accounts are set by the super admin, not by organizers. */
   @Post()
+  @PlatformAdminOnly()
   async create(
     @Body() dto: CreateBeneficiaryDto,
     @CurrentAdmin() admin: AdminPrincipal,
@@ -30,6 +33,7 @@ export class BeneficiariesController {
   }
 
   @Post(':id/confirm')
+  @PlatformAdminOnly()
   async confirm(
     @Param('id') id: string,
     @CurrentAdmin() admin: AdminPrincipal,
@@ -41,6 +45,7 @@ export class BeneficiariesController {
 
   /** Points an event at one of the workspace's confirmed accounts. */
   @Post('events/:eventId/select')
+  @PlatformAdminOnly()
   async select(
     @Param('eventId') eventId: string,
     @Body() dto: SelectBeneficiaryDto,

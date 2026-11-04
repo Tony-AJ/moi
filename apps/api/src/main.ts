@@ -39,7 +39,7 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: origins,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Workspace-Id'],
     credentials: false,
     maxAge: 86400,
   });

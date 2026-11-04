@@ -43,10 +43,12 @@ export class AdminEventsController {
     @Body() dto: CreateEventDto,
     @CurrentAdmin() admin: AdminPrincipal,
   ) {
-    const scope = await this.access.resolveScope(admin, dto.workspaceId);
-    if (scope.role === 'EVENT_STAFF') {
-      throw new ForbiddenException('Only a workspace owner or admin can create events');
+    // Events are created by the platform super admin against a chosen
+    // organizer; organizers manage the events they are given.
+    if (admin.platformRole !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only the super admin can create events');
     }
+    const scope = await this.access.resolveScope(admin, dto.workspaceId);
     return this.events.create(dto, admin.id, scope);
   }
 

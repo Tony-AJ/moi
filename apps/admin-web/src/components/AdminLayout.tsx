@@ -1,5 +1,6 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { actingWorkspace, isSuperAdmin } from '../lib/api';
 import { EventScopeProvider } from '../lib/scope';
 
 const NAV = [
@@ -20,7 +21,15 @@ const ROLE_LABEL: Record<string, string> = {
 
 export function AdminLayout() {
   const { admin, signOut } = useAuth();
+  const navigate = useNavigate();
+  const superAdmin = isSuperAdmin(admin);
+  const acting = superAdmin ? actingWorkspace.get() : null;
   const membership = admin?.memberships[0];
+
+  function backToConsole() {
+    actingWorkspace.clear();
+    navigate('/platform');
+  }
 
   return (
     <EventScopeProvider>
@@ -30,10 +39,12 @@ export function AdminLayout() {
             <div className="brand">MoiLedger</div>
             <div className="who">
               {admin?.name}
-              {membership
-                ? ' · ' + (ROLE_LABEL[membership.role] ?? membership.role)
-                : ''}
-              {membership ? <div>{membership.workspaceName}</div> : null}
+              {superAdmin
+                ? ' · Super admin'
+                : membership
+                  ? ' · ' + (ROLE_LABEL[membership.role] ?? membership.role)
+                  : ''}
+              <div>{acting ? acting.name : membership?.workspaceName}</div>
             </div>
           </div>
           <nav>
@@ -48,11 +59,22 @@ export function AdminLayout() {
               </NavLink>
             ))}
           </nav>
+          {superAdmin ? (
+            <button className="signout" type="button" onClick={backToConsole}>
+              &larr; Back to console
+            </button>
+          ) : null}
           <button className="signout" type="button" onClick={signOut}>
             Sign out
           </button>
         </aside>
         <main className="content">
+          {acting ? (
+            <div className="alert info">
+              Super admin view of <strong>{acting.name}</strong>. Everything here is this
+              organizer's data.
+            </div>
+          ) : null}
           <Outlet />
         </main>
       </div>

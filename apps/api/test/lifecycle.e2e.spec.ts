@@ -263,8 +263,8 @@ describe('stage 2: beneficiary configuration', () => {
   it('rejects a malformed UPI id', async () => {
     const response = await ctx.post(
       '/admin/beneficiaries',
-      { label: 'Bad', upiId: 'not a upi id', payeeName: 'Nobody' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, label: 'Bad', upiId: 'not a upi id', payeeName: 'Nobody' },
+      superToken,
     );
     expect(response.status).toBe(400);
   });
@@ -272,8 +272,8 @@ describe('stage 2: beneficiary configuration', () => {
   it('creates an account unconfirmed, and refuses to collect through it until confirmed', async () => {
     const created = await ctx.post(
       '/admin/beneficiaries',
-      { label: 'Second account', upiId: 'alpha.second@okhdfcbank', payeeName: 'Alpha payee two' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, label: 'Second account', upiId: 'alpha.second@okhdfcbank', payeeName: 'Alpha payee two' },
+      superToken,
     );
     expect(created.status).toBe(201);
     expect(created.body.status).toBe('UNCONFIRMED');
@@ -281,7 +281,7 @@ describe('stage 2: beneficiary configuration', () => {
     const select = await ctx.post(
       '/admin/beneficiaries/events/' + tenantA.eventId + '/select',
       { beneficiaryAccountId: created.body.id },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(select.status).toBe(400);
     expect(JSON.stringify(select.body)).toMatch(/confirm/i);
@@ -291,12 +291,13 @@ describe('stage 2: beneficiary configuration', () => {
     const response = await ctx.post(
       '/admin/beneficiaries',
       {
+        workspaceId: tenantA.workspaceId,
         label: 'Last four',
         upiId: 'alpha.four@okicici',
         payeeName: 'Alpha payee',
         accountLast4: '1234',
       },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(response.status).toBe(201);
     expect(response.body.accountLast4).toBe('1234');
@@ -306,12 +307,13 @@ describe('stage 2: beneficiary configuration', () => {
     const response = await ctx.post(
       '/admin/beneficiaries',
       {
+        workspaceId: tenantA.workspaceId,
         label: 'Too long',
         upiId: 'alpha.long@okicici',
         payeeName: 'Alpha payee',
         accountLast4: '123456789012',
       },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(response.status).toBe(400);
   });
@@ -320,15 +322,15 @@ describe('stage 2: beneficiary configuration', () => {
     const shared = 'shared.vpa@okicici';
     const first = await ctx.post(
       '/admin/beneficiaries',
-      { label: 'Shared', upiId: shared, payeeName: 'A payee' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, label: 'Shared', upiId: shared, payeeName: 'A payee' },
+      superToken,
     );
     expect(first.status).toBe(201);
 
     const again = await ctx.post(
       '/admin/beneficiaries',
-      { label: 'Shared again', upiId: shared, payeeName: 'A payee' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, label: 'Shared again', upiId: shared, payeeName: 'A payee' },
+      superToken,
     );
     expect(again.status).toBe(409);
 
@@ -336,13 +338,13 @@ describe('stage 2: beneficiary configuration', () => {
     // platform is not the arbiter of who owns a UPI handle.
     const other = await ctx.post(
       '/admin/beneficiaries',
-      { label: 'Shared elsewhere', upiId: shared, payeeName: 'B payee' },
-      tenantB.ownerToken,
+      { workspaceId: tenantB.workspaceId, label: 'Shared elsewhere', upiId: shared, payeeName: 'B payee' },
+      superToken,
     );
     expect(other.status).toBe(201);
   });
 
-  it('lets only the owner confirm an account, not a workspace admin', async () => {
+  it('lets only the super admin confirm an account, not the organizer or a workspace admin', async () => {
     const admin = await createUser('wsadmin@test.local', 'Workspace admin');
     await ctx.prisma.workspaceMember.create({
       data: {
@@ -363,29 +365,61 @@ describe('stage 2: beneficiary configuration', () => {
       },
     });
 
-    const byAdmin = await ctx.post(
-      '/admin/beneficiaries/' + account.id + '/confirm',
-      undefined,
-      adminToken,
-    );
-    expect(byAdmin.status).toBe(403);
+    for (const token of [adminToken, tenantA.ownerToken]) {
+      const refused = await ctx.post('/admin/beneficiaries/' + account.id + '/confirm', undefined, token);
+      expect(refused.status).toBe(403);
+    }
 
-    const byOwner = await ctx.post(
+    const bySuper = await ctx.post(
       '/admin/beneficiaries/' + account.id + '/confirm',
       undefined,
+      superToken,
+    );
+    expect(bySuper.status).toBe(201);
+    expect(bySuper.body.status).toBe('CONFIRMED');
+  });
+
+  it('refuses an organizer adding or switching the UPI account', async () => {
+    const add = await ctx.post(
+      '/admin/beneficiaries',
+      { label: 'Organizer own', upiId: 'alpha.own@okicici', payeeName: 'Alpha' },
       tenantA.ownerToken,
     );
-    expect(byOwner.status).toBe(201);
-    expect(byOwner.body.status).toBe('CONFIRMED');
+    expect(add.status).toBe(403);
+
+    const select = await ctx.post(
+      '/admin/beneficiaries/events/' + tenantA.eventId + '/select',
+      { beneficiaryAccountId: tenantA.accountId },
+      tenantA.ownerToken,
+    );
+    expect(select.status).toBe(403);
   });
 });
 
 describe('stage 3: event creation', () => {
+  it('refuses event creation by an organizer', async () => {
+    const response = await ctx.post(
+      '/admin/events',
+      { name: 'Organizer made event', eventDate: '2026-12-01T00:00:00.000Z' },
+      tenantA.ownerToken,
+    );
+    expect(response.status).toBe(403);
+  });
+
+  it('refuses event creation by the super admin without naming a workspace', async () => {
+    const response = await ctx.post(
+      '/admin/events',
+      { name: 'Nowhere event', eventDate: '2026-12-01T00:00:00.000Z' },
+      superToken,
+    );
+    expect(response.status).toBe(403);
+  });
+
   it('creates an event in the caller own workspace', async () => {
     const response = await ctx.post(
       '/admin/events',
-      { name: 'Alpha second event', eventDate: '2026-12-01T00:00:00.000Z' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, name: 'Alpha second event', eventDate: '2026-12-01T00:00:00.000Z' },
+      superToken,
     );
     expect(response.status).toBe(201);
     expect(response.body.guestUrl).toContain('/e/');
@@ -397,13 +431,13 @@ describe('stage 3: event creation', () => {
   it('derives a unique slug when two events share a name', async () => {
     const first = await ctx.post(
       '/admin/events',
-      { name: 'Repeated Name Event', eventDate: '2026-12-02T00:00:00.000Z' },
-      tenantA.ownerToken,
+      { workspaceId: tenantA.workspaceId, name: 'Repeated Name Event', eventDate: '2026-12-02T00:00:00.000Z' },
+      superToken,
     );
     const second = await ctx.post(
       '/admin/events',
-      { name: 'Repeated Name Event', eventDate: '2026-12-03T00:00:00.000Z' },
-      tenantB.ownerToken,
+      { workspaceId: tenantB.workspaceId, name: 'Repeated Name Event', eventDate: '2026-12-03T00:00:00.000Z' },
+      superToken,
     );
     expect(first.status).toBe(201);
     expect(second.status).toBe(201);
@@ -414,12 +448,13 @@ describe('stage 3: event creation', () => {
     const response = await ctx.post(
       '/admin/events',
       {
+        workspaceId: tenantA.workspaceId,
         name: 'Bad range event',
         eventDate: '2026-12-04T00:00:00.000Z',
         minAmountPaise: 500000,
         maxAmountPaise: 1000,
       },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(response.status).toBe(400);
   });
@@ -445,7 +480,7 @@ describe('stage 3: event creation', () => {
     const first = await ctx.post(
       '/admin/beneficiaries/events/' + event.id + '/select',
       { beneficiaryAccountId: tenantA.accountId },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(first.status).toBe(201);
     expect(first.body.version).toBe(1);
@@ -453,14 +488,14 @@ describe('stage 3: event creation', () => {
     const second = await ctx.post(
       '/admin/beneficiaries/events/' + event.id + '/select',
       { beneficiaryAccountId: account.id },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(second.status).toBe(201);
     expect(second.body.version).toBe(2);
 
     const history = await ctx.get(
       '/admin/beneficiaries/events/' + event.id + '/history',
-      tenantA.ownerToken,
+      superToken,
     );
     expect(history.body).toHaveLength(2);
     // Version 1 is closed rather than deleted.
@@ -486,7 +521,7 @@ describe('stage 3: event creation', () => {
     await ctx.post(
       '/admin/beneficiaries/events/' + event.id + '/select',
       { beneficiaryAccountId: tenantA.accountId },
-      tenantA.ownerToken,
+      superToken,
     );
 
     const status = await ctx.get('/entries/' + entry.body.accessToken + '/status');
@@ -1505,13 +1540,17 @@ describe('stage 8: event closure', () => {
   it('stops new contributions once closed, and keeps the history readable', async () => {
     const event = await ctx.post(
       '/admin/events',
-      { name: 'Closing Ceremony Event', eventDate: '2026-12-20T00:00:00.000Z' },
-      tenantA.ownerToken,
+      {
+        workspaceId: tenantA.workspaceId,
+        name: 'Closing Ceremony Event',
+        eventDate: '2026-12-20T00:00:00.000Z',
+      },
+      superToken,
     );
     const config = await ctx.post(
       '/admin/beneficiaries/events/' + event.body.id + '/select',
       { beneficiaryAccountId: tenantA.accountId },
-      tenantA.ownerToken,
+      superToken,
     );
     expect(config.status).toBe(201);
 
@@ -1541,10 +1580,16 @@ describe('stage 8: event closure', () => {
 });
 
 describe('platform operations', () => {
-  it('gives a platform role no implicit read of customer data', async () => {
+  it('lets the super admin read any register, but only in a named workspace', async () => {
     expect((await ctx.get('/admin/events', superToken)).status).toBe(403);
     expect((await ctx.get('/admin/entries', superToken)).status).toBe(403);
-    expect((await ctx.get('/admin/beneficiaries', superToken)).status).toBe(403);
+
+    const ws = '?workspaceId=' + tenantB.workspaceId;
+    const events = await ctx.get('/admin/events' + ws, superToken);
+    expect(events.status).toBe(200);
+    expect(events.body.map((event: { id: string }) => event.id)).toContain(tenantB.eventId);
+    expect((await ctx.get('/admin/entries' + ws, superToken)).status).toBe(200);
+    expect((await ctx.get('/admin/beneficiaries' + ws, superToken)).status).toBe(200);
   });
 
   it('writes an audit row for every login attempt, successful or not', async () => {

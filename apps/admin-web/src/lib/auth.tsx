@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { api, auth as tokenStore, isSuperAdmin, type AdminProfile } from './api';
+import { actingWorkspace, api, auth as tokenStore, isSuperAdmin, type AdminProfile } from './api';
 
 interface AuthState {
   admin: AdminProfile | null;
@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     tokenStore.clear();
+    actingWorkspace.clear();
     setAdmin(null);
   }, []);
 
@@ -95,8 +96,14 @@ export function RequireSuperAdmin({ children }: { children: ReactNode }) {
 export function RequireWorkspace({ children }: { children: ReactNode }) {
   const { admin, signOut } = useAuth();
 
+  // A super admin works inside an organizer workspace they opened from the
+  // console; without one they belong in the console.
+  if (isSuperAdmin(admin)) {
+    if (!actingWorkspace.get()) return <Navigate to="/platform" replace />;
+    return <>{children}</>;
+  }
+
   if (admin && admin.memberships.length === 0) {
-    if (isSuperAdmin(admin)) return <Navigate to="/platform" replace />;
     return (
       <div className="login-shell">
         <div className="login-card">

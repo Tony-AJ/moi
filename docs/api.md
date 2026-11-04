@@ -127,9 +127,16 @@ change form.
 
 ## Platform (super admin)
 
-Every route requires `platformRole = SUPER_ADMIN` (`403 Platform administrators
-only` otherwise). None of them return guest names, amounts or totals; a
-platform role still grants no read of a workspace's register.
+Every route here requires `platformRole = SUPER_ADMIN` (`403 Platform
+administrators only` otherwise).
+
+The super admin also has full access to the organizer routes below. They name
+the workspace with the `X-Workspace-Id` header (or a `workspaceId` query/body
+field); a request that passes an `eventId` takes the workspace from the event.
+With neither, the answer is `403 Choose which organizer workspace to work in`.
+Only the super admin may `POST /admin/events` and create, confirm or select
+UPI accounts (`/admin/beneficiaries`); organizers get `403` there and can only
+list the accounts.
 
 ### `GET /admin/platform/overview`
 Each workspace with its active logins and its events:
@@ -144,8 +151,8 @@ Each workspace with its active logins and its events:
 }]
 ```
 
-`paymentReady` is false until the organizer has added, confirmed and selected
-their own UPI account.
+Each event also carries `upiId`, `payeeName` and
+`totals` (`submittedPaise`, `verifiedPaise`, `verifiedCount`, `reviewCount`).
 
 ### `POST /admin/platform/organizers`
 Creates the workspace, the event and the organizer login in one transaction.
@@ -158,7 +165,9 @@ Creates the workspace, the event and the organizer login in one transaction.
   "eventName": "Kumar & Priya Wedding Reception",
   "eventDate": "2026-12-05T10:00:00.000Z",
   "hostName": "Kumar Family",
-  "venue": "Sri Krishna Mahal"
+  "venue": "Sri Krishna Mahal",
+  "upiId": "kumar.family@okicici",
+  "payeeName": "Kumar Family"
 }
 ```
 
@@ -169,8 +178,9 @@ here, stored only as a bcrypt hash, and never written to the audit log.
 workspace instead.
 
 ### `POST /admin/platform/workspaces/:workspaceId/events`
-`{ "eventName", "eventDate", "hostName?", "venue?" }` — another event for an
-existing organizer, visible to them immediately with their existing login.
+`{ "eventName", "eventDate", "hostName?", "venue?", "upiId?", "payeeName?" }` —
+another event for an existing organizer. Without `upiId` it reuses the
+organizer's confirmed UPI account, visible to them immediately with their existing login.
 
 ### `PATCH /admin/platform/workspaces/:workspaceId`
 `{ "status": "SUSPENDED", "reason": "..." }` or `{ "status": "ACTIVE" }`.

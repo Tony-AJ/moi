@@ -42,6 +42,24 @@ export class WorkspaceAccessService {
     principal: AdminPrincipal,
     requestedWorkspaceId?: string,
   ): Promise<WorkspaceScope> {
+    const requested = requestedWorkspaceId ?? principal.actingWorkspaceId ?? undefined;
+
+    // The platform super admin runs every organizer's event: creating them,
+    // setting the UPI account, reconciling and reporting. They reach any
+    // workspace, suspended ones included, as if they were its owner, but
+    // must say which one; there is no implicit "all workspaces" scope.
+    if (principal.platformRole === 'SUPER_ADMIN') {
+      if (!requested) {
+        throw new ForbiddenException('Choose which organizer workspace to work in');
+      }
+      const workspace = await this.prisma.workspace.findUnique({
+        where: { id: requested },
+        select: { id: true },
+      });
+      if (!workspace) throw new NotFoundException('Workspace not found');
+      return { workspaceId: workspace.id, role: 'WORKSPACE_OWNER', eventIds: null };
+    }
+
     const memberships = await this.prisma.workspaceMember.findMany({
       where: {
         userId: principal.id,
@@ -56,8 +74,8 @@ export class WorkspaceAccessService {
       throw new ForbiddenException('You do not have access to any active workspace');
     }
 
-    const membership = requestedWorkspaceId
-      ? memberships.find((m) => m.workspaceId === requestedWorkspaceId)
+    const membership = requested
+      ? memberships.find((m) => m.workspaceId === requested)
       : memberships.length === 1
         ? memberships[0]
         : undefined;
