@@ -343,6 +343,9 @@ model AdminUser {
   /// their own, every admin route except /me and change-password is refused,
   /// so a password that travelled over WhatsApp or SMS is single-use.
   mustChangePassword Boolean      @default(false)
+  /// When the password was last set. Tokens issued before this are refused,
+  /// so a super admin reset also ends every session opened with the old one.
+  passwordChangedAt  DateTime?
   lastLoginAt        DateTime?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt

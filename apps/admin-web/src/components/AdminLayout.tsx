@@ -10,7 +10,6 @@ const NAV = [
   { to: '/events', label: 'Event & QR' },
   { to: '/reports', label: 'Reports' },
   { to: '/activity', label: 'Activity' },
-  { to: '/change-password', label: 'Change password' },
 ];
 
 const ROLE_LABEL: Record<string, string> = {

@@ -16,6 +16,7 @@ import { slugify } from '../../common/utils/token.util';
 import {
   AddWorkspaceEventDto,
   ProvisionOrganizerDto,
+  SetPasswordDto,
   UpdatePlatformUserDto,
   UpdateWorkspaceStatusDto,
 } from './dto/platform.dto';
@@ -172,8 +173,8 @@ export class PlatformService {
       this.events.uniqueSlug(dto.eventName),
     ]);
 
-    const temporaryPassword = generateTemporaryPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 12);
+    const password = generateTemporaryPassword();
+    const passwordHash = await bcrypt.hash(password, 12);
     const now = new Date();
 
     // One transaction: a half-provisioned organizer (a user with no
@@ -200,7 +201,9 @@ export class PlatformService {
           platformRole: 'USER',
           // Legacy flat role, still read by a few pre-tenant code paths.
           role: 'OWNER',
-          mustChangePassword: true,
+          // Organizers do not manage their own password: the one issued here
+          // stays until the super admin resets it.
+          mustChangePassword: false,
         },
       });
 
@@ -281,7 +284,7 @@ export class PlatformService {
         name: created.organizer.name,
         email: created.organizer.email,
       },
-      temporaryPassword,
+      password,
     };
   }
 
@@ -357,15 +360,26 @@ export class PlatformService {
     };
   }
 
-  async resetPassword(userId: string, actor: AdminPrincipal, ip?: string) {
+  /**
+   * Sets an organizer's password. Organizers cannot change their own, so this
+   * is the only way a password changes: the super admin either types one or
+   * lets the system generate it. The old password stops working at once.
+   */
+  async resetPassword(
+    userId: string,
+    dto: SetPasswordDto,
+    actor: AdminPrincipal,
+    ip?: string,
+  ) {
     const target = await this.manageableUser(userId, actor);
 
-    const temporaryPassword = generateTemporaryPassword();
+    const password = dto.password ?? generateTemporaryPassword();
     await this.prisma.adminUser.update({
       where: { id: target.id },
       data: {
-        passwordHash: await bcrypt.hash(temporaryPassword, 12),
-        mustChangePassword: true,
+        passwordHash: await bcrypt.hash(password, 12),
+        mustChangePassword: false,
+        passwordChangedAt: new Date(),
       },
     });
 
@@ -377,12 +391,13 @@ export class PlatformService {
       entityType: 'AdminUser',
       entityId: target.id,
       ip,
-      metadata: { email: target.email },
+      // Never the password itself.
+      metadata: { email: target.email, chosenBySuperAdmin: Boolean(dto.password) },
     });
 
     return {
       user: { id: target.id, name: target.name, email: target.email },
-      temporaryPassword,
+      password,
     };
   }
 

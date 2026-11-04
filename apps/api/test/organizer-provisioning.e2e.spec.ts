@@ -6,7 +6,8 @@
  * organizer's UPI account. They hand over a one-time password; the organizer
  * signs in, must replace it, and from then on sees and manages only their own
  * event: its details, its register, its reports and its activity. The super
- * admin can open any organizer's register and export its reports. Two organizers are provisioned side by side so every isolation
+ * admin can open any organizer's register and export its reports. Organizers
+ * never set their own password: the super admin issues it and resets it. Two organizers are provisioned side by side so every isolation
  * claim is checked against a real neighbour rather than an empty database.
  *
  * Runs against a throwaway Postgres (TEST_DATABASE_URL), like the other e2e
@@ -28,9 +29,8 @@ interface Organizer {
   workspaceId: string;
   eventId: string;
   eventSlug: string;
-  temporaryPassword: string;
-  /** Set once the organizer has chosen their own password. */
-  password?: string;
+  /** Issued by the super admin; the organizer cannot change it. */
+  password: string;
   token?: string;
 }
 
@@ -71,22 +71,16 @@ async function provision(key: string): Promise<Organizer> {
     workspaceId: response.body.workspace.id,
     eventId: response.body.event.id,
     eventSlug: response.body.event.slug,
-    temporaryPassword: response.body.temporaryPassword,
+    password: response.body.password,
   };
 }
 
-/** Signs in with the issued password and replaces it, as the UI forces. */
-async function completeFirstSignIn(organizer: Organizer, newPassword: string) {
-  const firstToken = await ctx.login(organizer.email, organizer.temporaryPassword);
-  const changed = await ctx.post(
-    '/admin/auth/change-password',
-    { currentPassword: organizer.temporaryPassword, newPassword },
-    firstToken,
-  );
-  expect(changed.status).toBe(201);
-  organizer.password = newPassword;
-  organizer.token = await ctx.login(organizer.email, newPassword);
+async function signIn(organizer: Organizer) {
+  organizer.token = await ctx.login(organizer.email, organizer.password);
 }
+
+/** iat has one-second resolution; wait so a new token is not "before" a reset. */
+const nextSecond = () => new Promise((resolve) => setTimeout(resolve, 1100));
 
 beforeAll(async () => {
   await ctx.start();
@@ -103,13 +97,13 @@ describe('super admin provisions organizers', () => {
   it('creates the workspace, the event and an owner login in one call', async () => {
     organizerA = await provision('Kumar');
 
-    expect(organizerA.temporaryPassword).toMatch(TEMP_PASSWORD_SHAPE);
+    expect(organizerA.password).toMatch(TEMP_PASSWORD_SHAPE);
 
     const user = await ctx.prisma.adminUser.findUniqueOrThrow({
       where: { id: organizerA.userId },
       include: { memberships: true },
     });
-    expect(user.mustChangePassword).toBe(true);
+    expect(user.mustChangePassword).toBe(false);
     expect(user.platformRole).toBe('USER');
     expect(user.memberships).toHaveLength(1);
     expect(user.memberships[0]).toMatchObject({
@@ -135,7 +129,7 @@ describe('super admin provisions organizers', () => {
   it('provisions a second, unrelated organizer', async () => {
     organizerB = await provision('Raman');
     expect(organizerB.workspaceId).not.toBe(organizerA.workspaceId);
-    expect(organizerB.temporaryPassword).not.toBe(organizerA.temporaryPassword);
+    expect(organizerB.password).not.toBe(organizerA.password);
   });
 
   it('refuses a second login for an email that already has one', async () => {
@@ -185,7 +179,7 @@ describe('super admin provisions organizers', () => {
     const overview = await ctx.get('/admin/platform/overview', superToken);
     expect(overview.status).toBe(200);
     const audit = await ctx.prisma.auditLog.findMany();
-    for (const secret of [organizerA.temporaryPassword, organizerB.temporaryPassword]) {
+    for (const secret of [organizerA.password, organizerB.password]) {
       expect(JSON.stringify(overview.body)).not.toContain(secret);
       expect(JSON.stringify(audit)).not.toContain(secret);
     }
@@ -196,62 +190,45 @@ describe('super admin provisions organizers', () => {
   });
 });
 
-describe('first sign-in with an issued password', () => {
-  let firstToken: string;
-
-  it('signs in and reports that a new password is required', async () => {
+describe('organizer sign-in', () => {
+  it('signs in with the issued password and goes straight to the event', async () => {
     const response = await ctx.post('/admin/auth/login', {
       email: organizerA.email,
-      password: organizerA.temporaryPassword,
+      password: organizerA.password,
     });
     expect(response.status).toBe(201);
-    firstToken = response.body.accessToken;
     expect(response.body.admin).toMatchObject({
-      mustChangePassword: true,
+      mustChangePassword: false,
       platformRole: 'USER',
       memberships: [
-        {
-          workspaceId: organizerA.workspaceId,
-          role: 'WORKSPACE_OWNER',
-          workspaceStatus: 'ACTIVE',
-        },
+        { workspaceId: organizerA.workspaceId, role: 'WORKSPACE_OWNER', workspaceStatus: 'ACTIVE' },
       ],
     });
+    organizerA.token = response.body.accessToken;
+    expect((await ctx.get('/admin/events', organizerA.token)).status).toBe(200);
   });
 
-  it('refuses every data route until the password is replaced', async () => {
-    for (const path of [
-      '/admin/events',
-      '/admin/entries',
-      '/admin/activity',
-      '/admin/stats',
-      '/admin/beneficiaries',
-    ]) {
-      const response = await ctx.get(path, firstToken);
-      expect(response.status).toBe(403);
-      expect(response.body.error).toBe('PASSWORD_CHANGE_REQUIRED');
-    }
-    expect((await ctx.get('/admin/auth/me', firstToken)).status).toBe(200);
-  });
+  it('does not let an organizer change their own password', async () => {
+    const response = await ctx.post(
+      '/admin/auth/change-password',
+      { currentPassword: organizerA.password, newPassword: 'Organizer-chosen-1' },
+      organizerA.token,
+    );
+    expect(response.status).toBe(403);
 
-  it('retires the issued password once a new one is chosen', async () => {
-    await completeFirstSignIn(organizerA, 'Kumar-own-password-1');
-
-    const me = await ctx.get('/admin/auth/me', organizerA.token);
-    expect(me.body.mustChangePassword).toBe(false);
-
-    const reuse = await ctx.post('/admin/auth/login', {
+    // The issued password still works; nothing changed.
+    expect((await ctx.post('/admin/auth/login', {
       email: organizerA.email,
-      password: organizerA.temporaryPassword,
-    });
-    expect(reuse.status).toBe(401);
-
-    // The token issued before the change keeps working now the flag is clear.
-    expect((await ctx.get('/admin/events', firstToken)).status).toBe(200);
+      password: organizerA.password,
+    })).status).toBe(201);
+    expect((await ctx.post('/admin/auth/login', {
+      email: organizerA.email,
+      password: 'Organizer-chosen-1',
+    })).status).toBe(401);
   });
 
-  it('lets the second organizer complete their own first sign-in', async () => {
-    await completeFirstSignIn(organizerB, 'Raman-own-password-1');
+  it('signs in the second organizer', async () => {
+    await signIn(organizerB);
     expect((await ctx.get('/admin/events', organizerB.token)).status).toBe(200);
   });
 });
@@ -513,30 +490,53 @@ describe('the super admin sees and runs every event', () => {
 });
 
 describe('credential lifecycle', () => {
-  it('resets a forgotten password with a new one-time password', async () => {
+  it('lets only the super admin set an organizer password, ending old sessions', async () => {
     const tokenBeforeReset = organizerA.token!;
-    const reset = await ctx.post(
+    await nextSecond();
+
+    const chosen = await ctx.post(
       '/admin/platform/users/' + organizerA.userId + '/reset-password',
-      {},
+      { password: 'Chosen-by-super-1' },
       superToken,
     );
-    expect(reset.status).toBe(201);
-    expect(reset.body.temporaryPassword).toMatch(TEMP_PASSWORD_SHAPE);
+    expect(chosen.status).toBe(201);
+    expect(chosen.body.password).toBe('Chosen-by-super-1');
 
-    // The password the organizer chose no longer works...
+    // The previous password no longer works...
     const old = await ctx.post('/admin/auth/login', {
       email: organizerA.email,
       password: organizerA.password,
     });
     expect(old.status).toBe(401);
+    // ...and a session opened with it is closed.
+    expect((await ctx.get('/admin/events', tokenBeforeReset)).status).toBe(401);
 
-    // ...and a session opened before the reset is held at the change form.
-    const held = await ctx.get('/admin/events', tokenBeforeReset);
-    expect(held.status).toBe(403);
-    expect(held.body.error).toBe('PASSWORD_CHANGE_REQUIRED');
+    organizerA.password = 'Chosen-by-super-1';
+    await nextSecond();
+    await signIn(organizerA);
+    expect((await ctx.get('/admin/events', organizerA.token)).status).toBe(200);
 
-    organizerA.temporaryPassword = reset.body.temporaryPassword;
-    await completeFirstSignIn(organizerA, 'Kumar-own-password-2');
+    // Too short a chosen password is refused.
+    const short = await ctx.post(
+      '/admin/platform/users/' + organizerA.userId + '/reset-password',
+      { password: 'short' },
+      superToken,
+    );
+    expect(short.status).toBe(400);
+  });
+
+  it('generates a password when the super admin does not type one', async () => {
+    await nextSecond();
+    const generated = await ctx.post(
+      '/admin/platform/users/' + organizerA.userId + '/reset-password',
+      {},
+      superToken,
+    );
+    expect(generated.status).toBe(201);
+    expect(generated.body.password).toMatch(TEMP_PASSWORD_SHAPE);
+    organizerA.password = generated.body.password;
+    await nextSecond();
+    await signIn(organizerA);
     expect((await ctx.get('/admin/events', organizerA.token)).status).toBe(200);
   });
 

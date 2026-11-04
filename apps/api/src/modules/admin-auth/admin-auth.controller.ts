@@ -7,6 +7,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { AdminAuthGuard } from '../../common/guards/admin-auth.guard';
 import { CurrentAdmin, type AdminPrincipal } from '../../common/decorators/current-admin.decorator';
 import { AllowPendingPassword } from '../../common/decorators/allow-pending-password.decorator';
+import { PlatformAdminOnly } from '../../common/decorators/platform-admin.decorator';
 
 @Controller('admin/auth')
 export class AdminAuthController {
@@ -27,9 +28,14 @@ export class AdminAuthController {
     return this.auth.me(admin.id);
   }
 
+  /**
+   * Super admins only. Organizer passwords are set by the super admin
+   * (POST /admin/platform/users/:id/reset-password), never by the organizer.
+   */
   @Post('change-password')
   @UseGuards(AdminAuthGuard)
   @AllowPendingPassword()
+  @PlatformAdminOnly()
   changePassword(
     @CurrentAdmin() admin: AdminPrincipal,
     @Body() dto: ChangePasswordDto,

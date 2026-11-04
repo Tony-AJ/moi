@@ -105,22 +105,20 @@ Unknown email and wrong password return the same `401`.
 Current admin profile. The admin row is re-read on every request, so
 deactivating an account revokes access immediately.
 
-### First sign-in with an issued password
+### Who sets passwords
 
-A login created or reset by a super admin has `mustChangePassword: true`.
-Until the user changes it, every admin route except `GET /admin/auth/me` and
-`POST /admin/auth/change-password` answers:
-
-```json
-{ "statusCode": 403, "error": "PASSWORD_CHANGE_REQUIRED", "message": "Choose a new password before continuing" }
-```
+Organizers cannot change their own password. The super admin issues it when
+creating the organizer and sets a new one with
+`POST /admin/platform/users/:userId/reset-password`. Setting a password ends
+every session opened before it (`401 Your password was changed`).
 
 `login` and `me` return `platformRole`, `mustChangePassword` and the active
 `memberships` (`workspaceId`, `workspaceName`, `workspaceStatus`, `role`) so
-the client can route to the platform console, the organizer workspace, or the
-change form.
+the client can route to the platform console or the organizer workspace.
 
 ### `POST /admin/auth/change-password`
+Super admins only (`403` for organizers and staff).
+
 `{ "currentPassword": "...", "newPassword": "..." }` (min 10 chars).
 
 ---
@@ -172,7 +170,7 @@ Creates the workspace, the event and the organizer login in one transaction.
 ```
 
 Returns `workspace`, `event` (with `guestUrl`), `organizer` and
-`temporaryPassword` (e.g. `Kq7M-x3Pa-9WtZ`). The password is returned only
+`password` (generated, e.g. `Kq7M-x3Pa-9WtZ`). The password is returned only
 here, stored only as a bcrypt hash, and never written to the audit log.
 `409` when the email already has a login — add an event to that organizer's
 workspace instead.
@@ -189,8 +187,9 @@ its members' admin requests. Nothing is deleted. `reason` is required to
 suspend.
 
 ### `POST /admin/platform/users/:userId/reset-password`
-Returns `{ user, temporaryPassword }`. The previous password stops working at
-once, and sessions already open are held at the change-password form.
+Sets an organizer's password. Body `{ "password": "..." }` (10+ characters) to
+choose it, or `{}` to have one generated. Returns `{ user, password }`. The old
+password and every session opened with it stop working at once.
 `400` for your own account, `403` for another super admin.
 
 ### `PATCH /admin/platform/users/:userId`

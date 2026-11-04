@@ -329,15 +329,15 @@ events.
 
 | Who | Can | Cannot |
 | --- | --- | --- |
-| **Super admin** (`PlatformRole SUPER_ADMIN`) | Create events (only role that can), each in a chosen organizer's workspace; set and change the organizer's UPI account; issue, reset and disable logins; suspend/restore a workspace; see every event's totals; open any organizer's entries, reconciliation, activity and reports | Manage other super admins |
-| **Organizer** (`WORKSPACE_OWNER`) | Edit their event details; record and verify entries; import statements; export reports; read their activity | Create events; add or change the UPI account; see any other organizer's event |
+| **Super admin** (`PlatformRole SUPER_ADMIN`) | Create events (only role that can), each in a chosen organizer's workspace; set and change the organizer's UPI account; issue logins and set organizer passwords; disable logins; suspend/restore a workspace; see every event's totals; open any organizer's entries, reconciliation, activity and reports | Manage other super admins |
+| **Organizer** (`WORKSPACE_OWNER`) | Edit their event details; record and verify entries; import statements; export reports; read their activity | Create events; add or change the UPI account; change their own password; see any other organizer's event |
 | **Event staff** (`EVENT_STAFF`) | Whatever their per-event grants allow, on assigned events only | Anything outside their assigned events |
 
 **Setting up an organizer**
 
 1. Super admin opens **Organizers & events** (`/platform`), enters the event, the organizer's name and email, and the organizer's **UPI ID**.
-2. One step creates the organizer's workspace, the event, the confirmed UPI account, and the login. A **one-time password** is shown once with a ready-to-send message.
-3. The organizer signs in and must set their own password before anything else opens (enforced by the API).
+2. One step creates the organizer's workspace, the event, the confirmed UPI account, and the login. The **password** is shown once with a ready-to-send message.
+3. The organizer signs in with it. Organizers **cannot change their own password**; only the super admin sets it (**Set password**: type one or generate one). Setting it ends every session opened with the old password.
 4. **Open register** puts the super admin inside that organizer's workspace (sent as the `X-Workspace-Id` header); **Excel / PDF** on each event row downloads its report directly.
 
 The super admin account can read every family's guest list and money, and
@@ -377,8 +377,8 @@ Here is how the complete system functions from before the event until after the 
 ```
 
 ### Phase 1: Event Setup & QR Deployment
-1. The super admin creates the event against the organizer under **Organizers & events**, entering the organizer's UPI ID (e.g., `family@okicici`), and sends the organizer the one-time password.
-2. The organizer signs in to the Admin Portal (`:5174`) and sets their own password.
+1. The super admin creates the event against the organizer under **Organizers & events**, entering the organizer's UPI ID (e.g., `family@okicici`), and sends the organizer their password.
+2. The organizer signs in to the Admin Portal (`:5174`) with the password the super admin gave them.
 3. Under **Event & QR → Edit details** they fill in the host name, venue, date, quick-pick amounts and phone requirements. The UPI account is shown read-only; only the super admin changes it.
 5. The system produces a print-ready QR code that points to the public guest URL (`https://your-domain.com/e/kumar-wedding-2026`).
 6. The QR standee is printed and placed at the entrance or dining hall gift desk.
@@ -548,10 +548,10 @@ All API endpoints are prefixed with `/api`. For exhaustive payloads, see [`docs/
 
 ### Super Admin (platform) — `SUPER_ADMIN` only, no guest data
 - `GET /api/admin/platform/overview` — Organizers, their logins and events, with counts and setup status only.
-- `POST /api/admin/platform/organizers` — Create workspace + event + organizer login; returns a one-time password once.
+- `POST /api/admin/platform/organizers` — Create workspace + event + organizer login; returns the organizer password once.
 - `POST /api/admin/platform/workspaces/:workspaceId/events` — Add another event to an existing organizer.
 - `PATCH /api/admin/platform/workspaces/:workspaceId` — Suspend (with reason) or restore a workspace.
-- `POST /api/admin/platform/users/:userId/reset-password` — Issue a new one-time password.
+- `POST /api/admin/platform/users/:userId/reset-password` — Set an organizer password (typed or generated); ends old sessions. Organizers cannot change their own.
 - `PATCH /api/admin/platform/users/:userId` — Disable or enable a login.
 
 ### Admin Activity

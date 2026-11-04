@@ -32,7 +32,10 @@ createRoot(document.getElementById('root')!).render(
             path="/change-password"
             element={
               <RequireAuth>
-                <ChangePasswordPage />
+                {/* Organizer passwords are set by the super admin only. */}
+                <RequireSuperAdmin>
+                  <ChangePasswordPage />
+                </RequireSuperAdmin>
               </RequireAuth>
             }
           />

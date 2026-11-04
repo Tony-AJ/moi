@@ -110,7 +110,11 @@ export class AdminAuthService {
     await this.prisma.adminUser.update({
       where: { id: adminId },
       // Choosing their own password is what retires an issued one.
-      data: { passwordHash: await bcrypt.hash(dto.newPassword, 12), mustChangePassword: false },
+      data: {
+        passwordHash: await bcrypt.hash(dto.newPassword, 12),
+        mustChangePassword: false,
+        passwordChangedAt: new Date(),
+      },
     });
 
     await this.audit.record({

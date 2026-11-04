@@ -128,3 +128,11 @@ export class UpdateWorkspaceStatusDto {
   @Length(3, 280, { message: 'Give a short reason for the suspension' })
   reason?: string;
 }
+
+/** Optional: leave out to have a password generated. */
+export class SetPasswordDto {
+  @IsOptional()
+  @IsString()
+  @Length(10, 128, { message: 'Password must be at least 10 characters' })
+  password?: string;
+}

@@ -37,7 +37,7 @@ export class AdminAuthGuard implements CanActivate {
       throw new UnauthorizedException('Missing bearer token');
     }
 
-    let payload: { sub: string };
+    let payload: { sub: string; iat?: number };
     try {
       payload = await this.jwt.verifyAsync(header.slice(7).trim());
     } catch {
@@ -53,12 +53,22 @@ export class AdminAuthGuard implements CanActivate {
         role: true,
         platformRole: true,
         mustChangePassword: true,
+        passwordChangedAt: true,
         isActive: true,
       },
     });
 
     if (!admin?.isActive) {
       throw new UnauthorizedException('Admin account is not active');
+    }
+
+    // A token from before the last password change belongs to the old
+    // password. iat is in whole seconds, so compare at that resolution.
+    if (
+      admin.passwordChangedAt &&
+      (payload.iat ?? 0) < Math.floor(admin.passwordChangedAt.getTime() / 1000)
+    ) {
+      throw new UnauthorizedException('Your password was changed. Please sign in again.');
     }
 
     const targets = [context.getHandler(), context.getClass()];

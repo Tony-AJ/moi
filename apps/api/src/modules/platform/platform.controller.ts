@@ -6,6 +6,7 @@ import { PlatformService } from './platform.service';
 import {
   AddWorkspaceEventDto,
   ProvisionOrganizerDto,
+  SetPasswordDto,
   UpdatePlatformUserDto,
   UpdateWorkspaceStatusDto,
 } from './dto/platform.dto';
@@ -55,14 +56,18 @@ export class PlatformController {
     return this.platform.updateWorkspaceStatus(workspaceId, dto, admin, ip);
   }
 
-  /** Issues a new one-time password; the old one stops working at once. */
+  /**
+   * Sets an organizer's password, typed by the super admin or generated.
+   * The old one stops working at once.
+   */
   @Post('users/:userId/reset-password')
   resetPassword(
     @Param('userId') userId: string,
+    @Body() dto: SetPasswordDto,
     @CurrentAdmin() admin: AdminPrincipal,
     @Ip() ip: string,
   ) {
-    return this.platform.resetPassword(userId, admin, ip);
+    return this.platform.resetPassword(userId, dto, admin, ip);
   }
 
   @Patch('users/:userId')

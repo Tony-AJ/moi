@@ -27,7 +27,7 @@ function credentialMessage(credentials: IssuedCredentials): string {
       ? 'Your MoiLedger organizer login' +
         (credentials.eventName ? ' for "' + credentials.eventName + '"' : '') +
         ' is ready.'
-      : 'Your MoiLedger password has been reset.';
+      : 'Your MoiLedger password has been changed.';
   return [
     'Hello ' + credentials.name + ',',
     '',
@@ -35,10 +35,9 @@ function credentialMessage(credentials: IssuedCredentials): string {
     '',
     'Sign in: ' + loginUrl(),
     'Email: ' + credentials.email,
-    'One-time password: ' + credentials.password,
+    'Password: ' + credentials.password,
     '',
-    'You will be asked to choose your own password when you sign in.',
-    'Please do not share this message.',
+    'Keep it safe and do not share this message. If you forget it, ask the platform administrator to reset it.',
   ].join('\n');
 }
 
@@ -68,10 +67,10 @@ function CredentialsCard({
 
   return (
     <div className="panel credentials">
-      <h2>{credentials.reason === 'NEW' ? 'Organizer login created' : 'Password reset'}</h2>
+      <h2>{credentials.reason === 'NEW' ? 'Organizer login created' : 'Password changed'}</h2>
       <div className="alert warn">
-        Copy these now. The one-time password is shown only once and is not stored anywhere. If
-        it is lost, reset it again.
+        Copy these now. The password is shown only once and is not stored anywhere readable. The
+        organizer cannot change it; if it is lost, set a new one here.
       </div>
 
       <dl className="kv">
@@ -81,7 +80,7 @@ function CredentialsCard({
         <dd className="mono">{loginUrl()}</dd>
         <dt>Email</dt>
         <dd className="mono">{credentials.email}</dd>
-        <dt>One-time password</dt>
+        <dt>Password</dt>
         <dd>
           <span className="secret mono">{credentials.password}</span>{' '}
           <button
@@ -147,7 +146,7 @@ function ProvisionForm({
       await onCreated({
         name: result.organizer.name,
         email: result.organizer.email,
-        password: result.temporaryPassword,
+        password: result.password,
         eventName: result.event.name,
         reason: 'NEW',
       });
@@ -420,22 +419,30 @@ export function PlatformPage() {
     }
   }
 
+  /**
+   * Organizers cannot change their own password; this is the only way it
+   * changes. Type one, or leave the box empty to have one generated.
+   */
   async function resetPassword(member: PlatformMember) {
-    if (
-      !window.confirm(
-        'Reset the password for ' +
-          member.name +
-          '? Their current password stops working immediately and they will need the new one-time password to sign in.',
-      )
-    ) {
+    const typed = window.prompt(
+      'New password for ' +
+        member.name +
+        ' (at least 10 characters).\nLeave empty to generate one.\n\n' +
+        'Their current password and open sessions stop working immediately.',
+      '',
+    );
+    if (typed === null) return;
+    const chosen = typed.trim();
+    if (chosen && chosen.length < 10) {
+      setError('A password must be at least 10 characters.');
       return;
     }
     await act(async () => {
-      const result = await api.platform.resetPassword(member.id);
+      const result = await api.platform.resetPassword(member.id, chosen || undefined);
       setCredentials({
         name: result.user.name,
         email: result.user.email,
-        password: result.temporaryPassword,
+        password: result.password,
         eventName: null,
         reason: 'RESET',
       });
@@ -686,7 +693,7 @@ export function PlatformPage() {
                               disabled={busy}
                               onClick={() => resetPassword(member)}
                             >
-                              Reset password
+                              Set password
                             </button>
                             <button
                               className={'btn small ' + (member.isActive ? 'danger' : 'secondary')}

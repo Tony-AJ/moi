@@ -127,7 +127,8 @@ export interface ProvisionResult {
   workspace: { id: string; name: string; slug: string };
   event: { id: string; name: string; slug: string; eventDate: string; guestUrl: string };
   organizer: { id: string; name: string; email: string };
-  temporaryPassword: string;
+  /** Shown once; organizers cannot change it themselves. */
+  password: string;
 }
 
 export interface ActivityRow {
@@ -459,10 +460,11 @@ export const api = {
         body: payload,
       }),
 
-    resetPassword: (userId: string) =>
-      request<{ user: { id: string; name: string; email: string }; temporaryPassword: string }>(
+    /** Leave password out to have one generated. */
+    resetPassword: (userId: string, password?: string) =>
+      request<{ user: { id: string; name: string; email: string }; password: string }>(
         '/admin/platform/users/' + userId + '/reset-password',
-        { method: 'POST' },
+        { method: 'POST', body: password ? { password } : {} },
       ),
 
     setUserActive: (userId: string, isActive: boolean) =>
