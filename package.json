@@ -14,5 +14,9 @@
     "db:migrate": "pnpm --filter @moi/api prisma:migrate",
     "db:seed": "pnpm --filter @moi/api seed",
     "test": "pnpm -r test"
+  },
+  "dependencies": {
+    "@neon/config": "^1.10.1",
+    "@neon/env": "^1.6.9"
   }
 }
